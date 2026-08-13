@@ -1,5 +1,10 @@
 # test runner output
 node_modules/
+dist/
+out/
+.next/
+next-env.d.ts
+*.tsbuildinfo
 playwright-report/
 test-results/
 results.json
