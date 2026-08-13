@@ -3,7 +3,10 @@
 Paste a [Funda](https://www.funda.nl) listing URL and get its **real, editable floor plan** — then
 rearrange furniture, knock walls through, annotate and measure, live, in a meeting.
 
-One self-contained HTML file. Double-click it; no build, no server, no install.
+**▶ Live: [tijsm.github.io/funda-planner](https://tijsm.github.io/funda-planner/)**
+
+One self-contained HTML file. Use it hosted, or double-click it locally — no build, no server, no
+install, works fully offline apart from the listing import.
 
 ```
 open index.html
