@@ -1,18 +1,50 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "module": "ESNext",
     "moduleResolution": "bundler",
     "jsx": "react-jsx",
     "strict": true,
-    "noUncheckedIndexedAccess": false,
     "noEmit": true,
+    "allowJs": true,
     "skipLibCheck": true,
+    "esModuleInterop": true,
     "isolatedModules": true,
-    "verbatimModuleSyntax": true,
+    "incremental": true,
     "resolveJsonModule": true,
-    "paths": { "@engine/*": ["./src/engine/*"], "@shell/*": ["./src/shell/*"], "@state/*": ["./src/state/*"] }
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
+    "paths": {
+      "@engine/*": [
+        "./src/engine/*"
+      ],
+      "@shell/*": [
+        "./src/shell/*"
+      ],
+      "@state/*": [
+        "./src/state/*"
+      ]
+    }
   },
-  "include": ["src", "tests/unit", "vite.config.ts", "vitest.config.ts"]
+  "include": [
+    "next-env.d.ts",
+    "**/*.ts",
+    "**/*.tsx",
+    ".next/types/**/*.ts",
+    ".next/dev/types/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "tests/e2e",
+    "out",
+    "dist"
+  ]
 }
