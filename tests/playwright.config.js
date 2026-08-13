@@ -24,7 +24,7 @@ export default defineConfig({
   }],
   webServer: {
     command: 'python3 -m http.server 8791 --directory ..',
-    url: 'http://127.0.0.1:8791/plattegrond-studio.html',
+    url: 'http://127.0.0.1:8791/index.html',
     reuseExistingServer: true,
     timeout: 30_000,
   },

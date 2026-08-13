@@ -5,13 +5,15 @@ import { fileURLToPath } from 'url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const FIXTURES = path.join(here, '..', 'fixtures');
-export const APP = '/plattegrond-studio.html';
+export const APP = '/index.html';
 export const FUNDA_URL = 'https://www.funda.nl/detail/koop/rosmalen/huis-pieter-kleijnstraat-19/44432123/';
 
 /* ── a clean, deterministic app on every test ──────────────────── */
 export async function fresh(page, opts = {}) {
   const errors = [];
-  page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
+  /* the browser's own /favicon.ico probe is not the app's doing */
+  const noise = t => /favicon/i.test(t);
+  page.on('console', m => { if (m.type() === 'error' && !noise(m.text())) errors.push(m.text()); });
   page.on('pageerror', e => errors.push('pageerror: ' + e.message));
   page.errors = errors;
 

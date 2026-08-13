@@ -6,7 +6,7 @@ import { fresh, S, waitFloors, FUNDA_URL, inkRatio, addFromTray, toast } from '.
 /* The app is meant to be double-clicked. That makes the page origin `null`,
    which is the strictest CORS case there is — so it gets its own suite. */
 const here = path.dirname(fileURLToPath(import.meta.url));
-const FILE_URL = pathToFileURL(path.join(here, '..', '..', 'plattegrond-studio.html')).href;
+const FILE_URL = pathToFileURL(path.join(here, '..', '..', 'index.html')).href;
 
 test.describe('opened straight from disk (file://)', () => {
   test('imports, edits and saves with no server involved', async ({ page }) => {

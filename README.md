@@ -6,7 +6,7 @@ rearrange furniture, knock walls through, annotate and measure, live, in a meeti
 One self-contained HTML file. Double-click it; no build, no server, no install.
 
 ```
-open plattegrond-studio.html
+open index.html
 ```
 
 ---
@@ -91,6 +91,6 @@ test against the real services so an upstream change is caught rather than hidde
 ## Layout
 
 ```
-plattegrond-studio.html   the entire application
+index.html                the entire application
 tests/                    Playwright suite + fixtures
 ```
