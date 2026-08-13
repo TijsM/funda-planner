@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUncheckedIndexedAccess": false,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "resolveJsonModule": true,
+    "paths": { "@engine/*": ["./src/engine/*"], "@shell/*": ["./src/shell/*"], "@state/*": ["./src/state/*"] }
+  },
+  "include": ["src", "tests/unit", "vite.config.ts", "vitest.config.ts"]
+}

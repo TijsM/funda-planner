@@ -1,5 +1,7 @@
 # test runner output
 node_modules/
+dist/
+.vite/
 playwright-report/
 test-results/
 results.json

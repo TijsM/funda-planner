@@ -1,0 +1,179 @@
+import type { Area, Floor, Item, Pt, Project } from './types';
+import { clamp, compass, polyArea, polyCentroid, pointInPoly, unitNormal } from './geometry';
+import { CAT_BY_KIND } from './catalog';
+import { labelOf, shellBBox } from './model';
+
+export type ViewKind = 'top' | 'eye' | 'iso' | 'sketch';
+
+export interface PromptOpts {
+  view: ViewKind;
+  /** an area id, or '*' for the whole floor */
+  room?: string;
+  style?: string;
+  furniture: boolean;
+  dimensions: boolean;
+}
+
+interface RoomFact { a: Area; name: string; area: number; c: Pt; items: Item[]; fitted: number; where: string }
+
+export interface PlanFacts {
+  rooms: RoomFact[];
+  loose: Item[];
+  doors: number;
+  windowSides: [string, number][];
+  w: number; h: number;
+  total: number;
+  notes: string[];
+}
+
+export function planFacts(f: Floor): PlanFacts {
+  /* Orient against the building, not the content bounds — a chair dropped
+     outside the walls must not rotate every room's compass point. */
+  const b = shellBBox(f) ?? { x0: 0, y0: 0, x1: 100, y1: 100 };
+
+  const rooms: RoomFact[] = f.areas
+    .map(a => ({ a, name: (a.name || '').trim(), area: polyArea(a.poly), c: polyCentroid(a.poly) }))
+    .filter(r => r.name && r.area > 10000) /* ignore cupboards under 1 m² */
+    .sort((x, y) => y.area - x.area)
+    .map(r => {
+      const w = compass(r.c, b);
+      return {
+        ...r,
+        items: [] as Item[],
+        fitted: 0,
+        where: w === 'central' ? 'centrally placed' : `on the ${w} side`,
+      };
+    });
+
+  const used = new Set<string>();
+  rooms.forEach(r => {
+    r.items = f.items.filter(i => {
+      if (used.has(i.id) || i.fromFunda) return false;
+      if (!pointInPoly({ x: i.x, y: i.y }, r.a.poly)) return false;
+      used.add(i.id);
+      return true;
+    });
+    r.fitted = f.items.filter(i => i.fromFunda && pointInPoly({ x: i.x, y: i.y }, r.a.poly)).length;
+  });
+
+  const windows: string[] = [], doors: string[] = [];
+  f.walls.forEach(w => w.openings.forEach(o => {
+    const n = unitNormal(w.a, w.b);
+    const t = clamp(o.at, 0, 1) * n.L;
+    const p = { x: w.a.x + n.ux * t, y: w.a.y + n.uy * t };
+    (o.type === 'window' ? windows : doors).push(compass(p, b));
+  }));
+  const tally = (arr: string[]): [string, number][] => {
+    const c: Record<string, number> = {};
+    arr.forEach(s => { c[s] = (c[s] || 0) + 1; });
+    return Object.entries(c).sort((a, b2) => b2[1] - a[1]);
+  };
+
+  return {
+    rooms,
+    loose: f.items.filter(i => !used.has(i.id) && !i.fromFunda),
+    doors: doors.length,
+    windowSides: tally(windows),
+    w: (b.x1 - b.x0) / 100,
+    h: (b.y1 - b.y0) / 100,
+    total: f.areas.reduce((s, a) => s + polyArea(a.poly), 0),
+    notes: f.notes
+      .map(n => String(n.text).replace(/\s+/g, ' ').trim())
+      .filter(t => t && !/geen rechten|©|zibber/i.test(t)),
+  };
+}
+
+export const AI_VIEWS: Record<ViewKind, { lead: string; cam: string }> = {
+  top: {
+    lead: "Photorealistic top-down (bird's-eye) architectural visualisation of the furnished floor plan below, ceiling removed.",
+    cam: 'Camera directly overhead, orthographic-looking, the whole floor filling the frame, walls cut cleanly at about 1.2 m height.',
+  },
+  eye: {
+    lead: 'Photorealistic wide-angle interior photograph of the space described below.',
+    cam: 'Camera at standing eye level (about 1.6 m), 24 mm lens, positioned in the {ROOM} looking across the room towards the windows.',
+  },
+  iso: {
+    lead: 'A 3D isometric cutaway "dollhouse" view of the furnished floor plan below, ceiling removed.',
+    cam: 'Isometric camera at roughly 45°, the whole floor visible, walls cut at about 1.2 m, soft studio lighting, clean architectural-model look.',
+  },
+  sketch: {
+    lead: 'A hand-drawn watercolour and ink architectural illustration of the floor plan below, seen from above.',
+    cam: "Loose confident linework, washes of colour, generous white paper margin, the feel of an architect's presentation sketch.",
+  },
+};
+
+export function buildPrompt(project: Project, f: Floor, opts: PromptOpts): string {
+  const F = planFacts(f);
+  const V = AI_VIEWS[opts.view] ?? AI_VIEWS.top;
+  const only = opts.room && opts.room !== '*' ? F.rooms.find(r => r.a.id === opts.room) : undefined;
+  const rooms = only ? [only] : F.rooms;
+  const dim = opts.dimensions;
+  const L: string[] = [];
+
+  const addr = project.source?.address || project.name;
+  L.push(V.lead, '');
+
+  L.push('SUBJECT');
+  L.push(only
+    ? `The ${only.name} of ${addr}${dim ? ` — ${(only.area / 10000).toFixed(1)} m²` : ''}, on the ${f.name.toLowerCase()}.`
+    : `${addr} — "${f.name}"${dim ? `, ${(F.total / 10000).toFixed(1)} m² over ${F.rooms.length} named rooms, overall footprint ${F.w.toFixed(1)} × ${F.h.toFixed(1)} m` : ''}.`);
+  L.push('North is at the top of the plan.', '');
+
+  L.push(only ? 'THE ROOM' : 'LAYOUT — reproduce exactly, do not invent or omit rooms');
+  rooms.forEach(r => {
+    const bits = [r.name];
+    if (dim) bits.push(`${(r.area / 10000).toFixed(1)} m²`);
+    if (!only) bits.push(r.where);
+    let line = `- ${bits.join(', ')}.`;
+    if (opts.furniture) {
+      if (r.items.length) {
+        line += ' Contains: ' + r.items.map(i => {
+          const nm = labelOf(i).toLowerCase() || 'object';
+          return dim ? `${nm} (${Math.round(i.w)}×${Math.round(i.h)} cm)` : nm;
+        }).join(', ') + '.';
+      } else if (r.fitted) {
+        line += ' Fitted units already in place (as drawn); no loose furniture.';
+      } else {
+        line += ' Empty — furnish it plausibly for its purpose.';
+      }
+    }
+    L.push(line);
+  });
+  if (!only && opts.furniture && F.loose.length) {
+    L.push('- Elsewhere on the floor: '
+      + F.loose.map(i => labelOf(i).toLowerCase() || 'object').join(', ') + '.');
+  }
+  L.push('');
+
+  if (!only) {
+    L.push('OPENINGS AND LIGHT');
+    if (F.windowSides.length) {
+      const many = F.windowSides.some(([, n]) => n > 1);
+      const sides = F.windowSides.map(([s, n]) => (many ? `${s} (${n})` : s));
+      const list = sides.length > 1 ? `${sides.slice(0, -1).join(', ')} and ${sides[sides.length - 1]}` : sides[0];
+      L.push(`Windows on the ${list} side${sides.length > 1 ? 's' : ''} — daylight comes from ${sides.length > 1 ? 'those directions' : 'that direction'}.`);
+    } else {
+      L.push('No windows are marked; light the space naturally and evenly.');
+    }
+    L.push(`${F.doors} doorway${F.doors === 1 ? '' : 's'} connect the rooms. Do not add windows or doors that are not listed.`, '');
+  }
+
+  if (opts.style?.trim()) L.push('STYLE', opts.style.trim(), '');
+  if (F.notes.length) {
+    L.push('NOTES FROM THE PLAN');
+    F.notes.slice(0, 8).forEach(n => L.push(`- ${n}`));
+    L.push('');
+  }
+
+  L.push('RENDER');
+  L.push(V.cam.replace('{ROOM}', rooms[0]?.name || 'main room'));
+  L.push(opts.view !== 'sketch'
+    ? 'Natural daylight, realistic materials and shadows, high detail, no people, no text or labels anywhere in the image.'
+    : 'No photographic realism, no text or labels in the image.');
+  L.push('');
+  L.push('Match the attached floor plan image exactly: same room shapes, same proportions, same relative positions. Do not add, remove or rearrange walls.');
+
+  return L.join('\n');
+}
+
+export const CATALOG_NAME = (kind: string) => CAT_BY_KIND[kind]?.name ?? kind;
