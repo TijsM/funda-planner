@@ -982,6 +982,31 @@ const G = {
     for (let i = 0; i < n; i++) { const cx = -w / 2 + (i + .5) * w / n; ln(g, cx - w / n * .22, h / 2 - 2, cx + w / n * .22, h / 2 - 2); }
     g.restore();
   },
+  /* round pot seen from above: rim, soil, foliage radiating out */
+  pot(g, w, leaves, ruffle) {
+    ci(g, 0, 0, w / 2); g.fill(); ci(g, 0, 0, w / 2);
+    g.save(); g.globalAlpha = .45; ci(g, 0, 0, w * .34); g.restore();
+    g.save(); g.globalAlpha = .75;
+    const n = leaves || 7;
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * 6.2832 + (ruffle ? .3 : 0);
+      const r0 = w * .12, r1 = w * (ruffle ? .5 : .46);
+      g.beginPath();
+      g.moveTo(Math.cos(a) * r0, Math.sin(a) * r0);
+      g.quadraticCurveTo(
+        Math.cos(a + .28) * r1 * .7, Math.sin(a + .28) * r1 * .7,
+        Math.cos(a) * r1, Math.sin(a) * r1);
+      g.stroke();
+    }
+    g.restore();
+  },
+  /* concentric rings — bowls, bird baths, fire pits */
+  rings(g, w, n) {
+    ci(g, 0, 0, w / 2); g.fill(); ci(g, 0, 0, w / 2);
+    g.save(); g.globalAlpha = .5;
+    for (let i = 1; i < (n || 2); i++) ci(g, 0, 0, w / 2 * (1 - i / (n || 2)));
+    g.restore();
+  },
   plant(g, w, ticks) {
     g.save(); g.globalAlpha = .3; ci(g, 0, 0, w / 2, 1); g.restore();
     ci(g, 0, 0, w / 2);
@@ -1068,7 +1093,45 @@ const CATALOG = [
     ['hatch',   'Roof hatch',  70,  90, (g, w, h) => { g.save(); g.setLineDash([8, 6]); box(g, w, h, 1); g.restore(); }],
     ['meter',   'Meter box',   60,  40, (g, w, h) => { box(g, w, h, 1); }],
   ]],
+  ['Decoration', [
+    ['potS',     'Plant pot',      36,  36, (g, w) => G.pot(g, w, 6)],
+    ['potM',     'Plant, medium',  55,  55, (g, w) => G.pot(g, w, 7)],
+    ['potL',     'Plant, large',   85,  85, (g, w) => G.pot(g, w, 9, 1)],
+    ['potXL',    'Statement plant',120,120, (g, w) => G.pot(g, w, 11, 1)],
+    ['potTall',  'Tall plant',     60,  60, (g, w) => { G.pot(g, w, 5); g.save(); g.globalAlpha = .5; ci(g, 0, 0, w * .13); g.restore(); }],
+    ['potTrio',  'Pot cluster',   110,  70, (g, w, h) => { G.pot(g, Math.min(w, h) * .62, 6); g.save(); g.translate(w * .3, h * .18); G.pot(g, Math.min(w, h) * .42, 5); g.restore(); g.save(); g.translate(-w * .28, h * .22); G.pot(g, Math.min(w, h) * .34, 5); g.restore(); }],
+    ['hangPlant','Hanging plant',  40,  40, (g, w) => { g.save(); g.setLineDash([4, 4]); ci(g, 0, 0, w / 2); g.restore(); G.pot(g, w * .74, 7); }],
+    ['planterBox','Planter box',  120,  35, (g, w, h) => { box(g, w, h, 3); const n = Math.max(2, Math.round(w / 45)); for (let i = 0; i < n; i++) { g.save(); g.translate(-w / 2 + (i + .5) * w / n, 0); G.pot(g, Math.min(h * .8, w / n * .8), 6); g.restore(); } }],
+    ['vase',     'Vase',           26,  26, (g, w) => G.rings(g, w, 2)],
+    ['bowl',     'Bowl',           34,  34, (g, w) => G.rings(g, w, 3)],
+    ['rugRound', 'Round rug',     200, 200, (g, w) => { g.save(); g.setLineDash([10, 7]); ci(g, 0, 0, w / 2); g.fill(); ci(g, 0, 0, w / 2); g.restore(); g.save(); g.globalAlpha = .4; ci(g, 0, 0, w / 2 - 14); g.restore(); }],
+    ['art',      'Artwork',        90,   5, (g, w, h) => { box(g, w, h, 1); }],
+    ['mirrorW',  'Wall mirror',    70,   5, (g, w, h) => { box(g, w, h, 1); g.save(); g.globalAlpha = .45; ln(g, -w / 2 + 5, 0, w / 2 - 5, 0); g.restore(); }],
+    ['clock',    'Clock',          32,  32, (g, w) => { ci(g, 0, 0, w / 2); g.fill(); ci(g, 0, 0, w / 2); g.save(); g.globalAlpha = .7; ln(g, 0, 0, 0, -w * .3); ln(g, 0, 0, w * .22, 0); g.restore(); }],
+    ['sculpt',   'Sculpture',      40,  40, (g, w, h) => { g.save(); g.globalAlpha = .35; box(g, w, h, 3); g.restore(); ci(g, 0, 0, w * .3); }],
+    ['candles',  'Candles',        24,  24, (g, w) => { ci(g, -w * .22, 0, w * .16); ci(g, w * .18, w * .1, w * .12); }],
+    ['screen',   'Room divider',  160,  22, (g, w, h) => { box(g, w, h, 2); g.save(); g.globalAlpha = .45; for (let i = 1; i < 4; i++) ln(g, -w / 2 + i * w / 4, -h / 2, -w / 2 + i * w / 4, h / 2); g.restore(); }],
+    ['coatrack', 'Coat rack',      45,  45, (g, w) => { ci(g, 0, 0, w / 2); g.save(); g.globalAlpha = .55; for (let i = 0; i < 5; i++) { const a = i / 5 * 6.2832; ci(g, Math.cos(a) * w * .34, Math.sin(a) * w * .34, w * .09, 1); } g.restore(); }],
+    ['basket',   'Basket',         45,  45, (g, w) => G.rings(g, w, 2)],
+    ['petbed',   'Pet bed',        70,  55, (g, w, h) => { g.beginPath(); g.ellipse(0, 0, w / 2, h / 2, 0, 0, 6.2832); g.fill(); g.stroke(); g.save(); g.globalAlpha = .45; g.beginPath(); g.ellipse(0, 0, w / 2 - 8, h / 2 - 7, 0, 0, 6.2832); g.stroke(); g.restore(); }],
+    ['shoerack', 'Shoe rack',      80,  32, (g, w, h) => G.cabinet(g, w, h, 3)],
+  ]],
   ['Garden', [
+    ['gpotR',    'Round planter',  80,  80, (g, w) => G.pot(g, w, 8, 1)],
+    ['gpotXL',   'Large pot',     130, 130, (g, w) => G.pot(g, w, 10, 1)],
+    ['bedRound', 'Round bed',     260, 260, (g, w) => { g.save(); g.globalAlpha = .22; ci(g, 0, 0, w / 2); g.fill(); g.restore(); g.save(); g.setLineDash([10, 7]); ci(g, 0, 0, w / 2); g.restore(); g.save(); g.globalAlpha = .55; for (let i = 0; i < 8; i++) { const a = i / 8 * 6.2832; ci(g, Math.cos(a) * w * .28, Math.sin(a) * w * .28, w * .09); } g.restore(); }],
+    ['firepit',  'Fire pit',      100, 100, (g, w) => { G.rings(g, w, 3); g.save(); g.globalAlpha = .8; for (let i = 0; i < 6; i++) { const a = i / 6 * 6.2832; ln(g, Math.cos(a) * w * .1, Math.sin(a) * w * .1, Math.cos(a) * w * .22, Math.sin(a) * w * .22); } g.restore(); }],
+    ['birdbath', 'Bird bath',      70,  70, (g, w) => G.rings(g, w, 3)],
+    ['water',    'Water feature', 160, 160, (g, w) => { g.save(); g.globalAlpha = .3; ci(g, 0, 0, w / 2); g.fill(); g.restore(); ci(g, 0, 0, w / 2); g.save(); g.globalAlpha = .5; ci(g, 0, 0, w * .3); ci(g, 0, 0, w * .15); g.restore(); }],
+    ['lantern',  'Garden lantern', 28,  28, (g, w) => { ci(g, 0, 0, w / 2); g.fill(); ci(g, 0, 0, w / 2); }],
+    ['hammock',  'Hammock',       300, 110, (g, w, h) => { g.beginPath(); g.ellipse(0, 0, w / 2, h / 2, 0, 0, 6.2832); g.fill(); g.stroke(); g.save(); g.globalAlpha = .45; for (let i = -3; i <= 3; i++) ln(g, i * w / 9, -h / 2 + 10, i * w / 9, h / 2 - 10); g.restore(); }],
+    ['swing',    'Swing seat',    180, 120, (g, w, h) => { g.save(); g.setLineDash([7, 5]); box(g, w, h, 6); g.restore(); rr(g, -w / 2 + 12, h / 2 - 34, w - 24, 26, 6); g.fill(); g.stroke(); }],
+    ['sandbox',  'Sandpit',       150, 150, (g, w, h) => { box(g, w, h, 4); g.save(); g.globalAlpha = .3; for (let i = 1; i < 6; i++) ln(g, -w / 2 + i * w / 6, -h / 2, -w / 2 + i * w / 6, h / 2); g.restore(); }],
+    ['compost',  'Compost bin',    80,  80, (g, w, h) => { box(g, w, h, 4); g.save(); g.globalAlpha = .35; ci(g, 0, 0, w * .3); g.restore(); }],
+    ['barrel',   'Rain barrel',    62,  62, (g, w) => G.rings(g, w, 2)],
+    ['stepstone','Stepping stones',60, 240, (g, w, h) => { const n = Math.max(2, Math.round(h / 60)); for (let i = 0; i < n; i++) { g.save(); g.translate((i % 2 ? 1 : -1) * w * .16, -h / 2 + (i + .5) * h / n); g.beginPath(); g.ellipse(0, 0, w * .34, h / n * .3, 0, 0, 6.2832); g.fill(); g.stroke(); g.restore(); } }],
+  ]],
+  ['Garden extras', [
     ['gtable',  'Garden table',160, 95, (g, w, h) => { G.chairs(g, w, h, 2); G.chairs(g, w, h, 1, 'lr'); G.table(g, w, h); }],
     ['lounger', 'Lounger',      200, 72, (g, w, h) => { box(g, w, h, 8); g.save(); g.globalAlpha = .4; rr(g, -w / 2, -h / 2, w * .3, h, 6); g.fill(); g.restore(); }],
     ['loungeSet','Lounge set',  260, 230, (g, w, h) => { g.save(); g.setLineDash([8, 6]); box(g, w, h, 6); g.restore(); g.save(); g.globalAlpha = .45; rr(g, -w / 2 + 8, -h / 2 + 8, w - 16, 70, 6); g.fill(); rr(g, -w / 2 + 8, h / 2 - 78, w * .5, 70, 6); g.fill(); g.restore(); }],
@@ -1098,7 +1161,8 @@ const CAT_BY_KIND = {};
 CATALOG.forEach(([grp, list]) => list.forEach(([k, name, w, h, draw]) => CAT_BY_KIND[k] = { kind: k, name, w, h, draw, group: grp }));
 
 /* palette per group — furniture tone follows its family */
-const GROUP_TONE = { Living: '#C7A44E', Dining: '#C7A44E', Bedroom: '#B08BB0', Kitchen: '#8FA9C4', Bathroom: '#6FA8B5', Structure: '#8C857A', Garden: '#7E9B5B' };
+const GROUP_TONE = { Living: '#C7A44E', Dining: '#C7A44E', Bedroom: '#B08BB0', Kitchen: '#8FA9C4',
+  Bathroom: '#6FA8B5', Structure: '#8C857A', Garden: '#7E9B5B', 'Garden extras': '#7E9B5B', Decoration: '#8FA98F' };
 const SWATCHES = ['#C7A44E', '#E4632C', '#B08BB0', '#8FA9C4', '#6FA8B5', '#7E9B5B', '#8C857A', '#D14B45', '#5E6B7E', '#A8794E'];
 const ROOM_SWATCHES = ['#E4DCC5', '#C6B9AA', '#D6C7B4', '#C9D3C0', '#BFCBD4', '#D8C5C5', '#DCDCDC', '#CFC7B8', '#C4CFCB', '#E2D6BC'];
 
@@ -1137,6 +1201,14 @@ function restore(from, to) {
   S.proj = st.p; S.fi = clamp(st.fi, 0, st.p.floors.length - 1);
   S.sel = []; S.draft = null; S.dirty = true;
   renderAll();
+}
+
+/* Objects carry their catalogue name as a label. An emptied label means
+   "show nothing" rather than "fall back to the default" — remember that
+   choice so it survives a reload. */
+function setLabel(o, v) {
+  o.label = v;
+  if (String(v).trim()) delete o.noLabel; else o.noLabel = 1;
 }
 
 /* ── selection helpers ─────────────────────────────────────────── */
@@ -1589,7 +1661,24 @@ function paint(g, W, H, view, o) {
         g.stroke(); g.restore();
       }
       g.restore();
-      if (i.label && Z > .12) label(i.label, i.x, i.y, clamp(11 * Math.min(1, Z * 3.4), 7, 12), '#3E3830', 'center', 'middle', true, i.rot);
+      /* Every catalogue object carries its name unless the label was cleared.
+         Skip it when the object is too small on screen for the text to land
+         inside it, otherwise a dense plan turns into a wall of words. */
+      const lab = i.label || (!i.noLabel && c ? c.name : '');
+      if (lab && i.w * Z > 34) {
+        const sz = clamp(11 * Math.min(1, Z * 3.4), 7, 12);
+        const rad = (i.rot || 0) * Math.PI / 180;
+        /* half-height of the rotated bounding box, so the caption clears the shape */
+        const hh = (Math.abs(i.w * Math.sin(rad)) + Math.abs(i.h * Math.cos(rad))) / 2;
+        if (hh * 2 * Z >= 46) {
+          const r = ((i.rot || 0) % 360 + 360) % 360;
+          label(lab, i.x, i.y, sz, '#3E3830', 'center', 'middle', true,
+            r > 90 && r < 270 ? r - 180 : r);        /* never upside-down */
+        } else {
+          /* too small to hold the words — caption it underneath, upright */
+          label(lab, i.x, i.y + hh + (sz * .95) * u, sz, '#4A443A', 'center', 'middle', true, 0);
+        }
+      }
     });
   }
 
@@ -1957,7 +2046,7 @@ function onDown(e) {
     const c = CAT_BY_KIND[S.place]; if (!c) { setPlace(null); return; }
     const p = snapPoint(wp);
     pushUndo();
-    const it = { id: uid(), kind: c.kind, x: p.x, y: p.y, w: c.w, h: c.h, rot: 0, color: GROUP_TONE[c.group], label: '' };
+    const it = { id: uid(), kind: c.kind, x: p.x, y: p.y, w: c.w, h: c.h, rot: 0, color: GROUP_TONE[c.group], label: c.name };
     floor().items.push(it);
     if (!e.shiftKey) { setPlace(null); setTool('select'); }
     setSel([{ t: 'item', id: it.id }]); renderTotals(); draw();
@@ -2116,7 +2205,13 @@ function doMove(wp, e) {
 function doHandle(wp, e) {
   const d = S.drag, h = d.h, o = h.o, g = d.orig;
   if (h.k === 'end') {
-    const p = e.altKey ? { x: R2(wp.x), y: R2(wp.y) } : snapPoint(wp, { skipWall: o.id });
+    let p = e.altKey ? { x: R2(wp.x), y: R2(wp.y) } : snapPoint(wp, { skipWall: o.id });
+    if (e.shiftKey) {
+      /* lock to the axis, measured from the end that is staying put */
+      const anchor = o[h.key === 'a' ? 'b' : 'a'];
+      p = Math.abs(p.x - anchor.x) >= Math.abs(p.y - anchor.y)
+        ? { x: p.x, y: anchor.y } : { x: anchor.x, y: p.y };
+    }
     o[h.key].x = p.x; o[h.key].y = p.y; S.snapHint = p;
   } else if (h.k === 'vtx') {
     const p = snapPoint(wp);
@@ -2426,7 +2521,7 @@ function renderInspector() {
   if (t === 'item') {
     const c = CAT_BY_KIND[o.kind];
     host.innerHTML = `
-      <div class="row"><span class="lbl">Object</span><div class="fields"><div class="fld wide"><input id="inLabel" placeholder="${c ? escapeHtml(c.name) : 'Fitted fixture'}" value="${escapeHtml(o.label || '')}"></div></div></div>
+      <div class="row"><span class="lbl">Label</span><div class="fields"><div class="fld wide"><input id="inLabel" placeholder="${c ? escapeHtml(c.name) : 'Fitted fixture'}" value="${escapeHtml(o.label || (!o.noLabel && c ? c.name : ''))}"></div></div></div>
       ${o.fromFunda ? '<div class="hint" style="margin:-2px 0 9px">Fitted object imported from the listing — kitchen unit, sanitary ware, stairs. Rename it, or delete and replace with a catalog item.</div>' : ''}
       ${numRow('Position', [{ id: 'inX', pre: 'X', v: R2(o.x), unit: 'cm' }, { id: 'inY', pre: 'Y', v: R2(o.y), unit: 'cm' }])}
       ${numRow('Size', [{ id: 'inW', pre: 'W', v: R2(o.w), unit: 'cm' }, { id: 'inH', pre: 'H', v: R2(o.h), unit: 'cm' }])}
@@ -2441,7 +2536,7 @@ function renderInspector() {
     bindNum('inX', v => o.x = v); bindNum('inY', v => o.y = v);
     bindNum('inW', v => o.w = Math.max(2, v)); bindNum('inH', v => o.h = Math.max(2, v));
     bindNum('inR', v => o.rot = R2((v % 360 + 360) % 360));
-    bindTxt('inLabel', v => o.label = v);
+    bindTxt('inLabel', v => setLabel(o, v));
     bindSwatch(c2 => o.color = c2);
     $('#oR90').onclick = () => { pushUndo(); o.rot = R2(((o.rot || 0) + 90) % 360); draw(); renderInspector(); };
     $('#oFlip').onclick = () => { pushUndo(); o.flip = o.flip ? 0 : 1; draw(); };
@@ -3211,7 +3306,7 @@ function renderTray() {
           const c = CAT_BY_KIND[S.place];
           if (c) {
             pushUndo();
-            const it = { id: uid(), kind: c.kind, x: p.x, y: p.y, w: c.w, h: c.h, rot: 0, color: GROUP_TONE[c.group], label: '' };
+            const it = { id: uid(), kind: c.kind, x: p.x, y: p.y, w: c.w, h: c.h, rot: 0, color: GROUP_TONE[c.group], label: c.name };
             floor().items.push(it);
             if (!ev.shiftKey) setPlace(null);
             setSel([{ t: 'item', id: it.id }]); renderTotals(); draw();
@@ -3251,8 +3346,14 @@ function updateCtx() {
   const sel = selObjects();
   if (!S.simple || !sel.length || S.drag || S.place) { el.classList.remove('show'); ctxSig = ''; return; }
 
-  const sig = sel.map(s => s.t + ':' + s.o.id).join(',') + '|' + (sel.length === 1 ? JSON.stringify([sel[0].o.color, sel[0].o.name, sel[0].o.width, sel[0].o.type]) : '');
-  if (sig !== ctxSig) { ctxSig = sig; el.innerHTML = ctxHtml(sel); bindCtx(sel); }
+  const sig = sel.map(s => s.t + ':' + s.o.id).join(',') + '|' +
+    (sel.length === 1 ? JSON.stringify([sel[0].o.color, sel[0].o.name, sel[0].o.width, sel[0].o.type, sel[0].o.label, sel[0].o.noLabel]) : '');
+  /* Defer a rebuild only while someone is typing in the bar — that would tear
+     the field out from under the caret. A focused *button* must not block it,
+     or pressing "Door" would never swap in the opening controls. */
+  const ae = document.activeElement;
+  const typing = el.contains(ae) && /^(INPUT|TEXTAREA)$/.test(ae.tagName);
+  if (sig !== ctxSig && !typing) { ctxSig = sig; el.innerHTML = ctxHtml(sel); bindCtx(sel); }
 
   const b = selScreenBBox(); if (!b) { el.classList.remove('show'); return; }
   el.classList.add('show');
@@ -3280,10 +3381,15 @@ function ctxHtml(sel) {
       + CB('ctxDel', 'i-trash', '', 'dgr', 'Delete');
 
   const { t, o, wall } = sel[0];
-  if (t === 'item')
-    return CB('ctxRot', 'i-rot', '', '', 'Rotate 90°') + CB('ctxFlip', 'i-flip', '', '', 'Mirror')
+  if (t === 'item') {
+    const cat = CAT_BY_KIND[o.kind];
+    const shown = o.label || (!o.noLabel && cat ? cat.name : '');
+    return `<input class="nm" id="ctxLabel" placeholder="${cat ? escapeHtml(cat.name) : 'label'}" value="${escapeHtml(shown)}">`
+      + '<span class="div"></span>'
+      + CB('ctxRot', 'i-rot', '', '', 'Rotate 90°') + CB('ctxFlip', 'i-flip', '', '', 'Mirror')
       + '<span class="div"></span>' + SWROW('item', o.color, SWATCHES.slice(0, 6))
       + '<span class="div"></span>' + CB('ctxDup', 'i-copy', '', '', 'Duplicate') + CB('ctxDel', 'i-trash', '', 'dgr', 'Delete');
+  }
 
   if (t === 'wall')
     return CB('ctxDoor', 'i-door', 'Door', 'pri', 'Put a door in this wall')
@@ -3356,6 +3462,14 @@ function bindCtx(sel) {
   el.querySelectorAll('.sw[data-cc]').forEach(b => b.onclick = e => {
     e.stopPropagation(); pushUndo(); o.color = b.dataset.cc; after();
   });
+
+  const lb = $('#ctxLabel');
+  if (lb) {
+    let started = false;
+    lb.onpointerdown = e => e.stopPropagation();
+    lb.oninput = () => { if (!started) { pushUndo(); started = true; } setLabel(o, lb.value); draw(); };
+    lb.onkeydown = e => { e.stopPropagation(); if (e.key === 'Enter' || e.key === 'Escape') lb.blur(); };
+  }
 
   const nm = $('#ctxName');
   if (nm) {
@@ -3710,7 +3824,7 @@ function initAI() {
   };
 }
 
-window.__S = S; window.__paint = paint; window.__contentBBox = contentBBox;
+window.__S = S; window.__setPlace = setPlace; window.__paint = paint; window.__contentBBox = contentBBox;
 document.addEventListener('DOMContentLoaded', boot);
 </script>
 </body>

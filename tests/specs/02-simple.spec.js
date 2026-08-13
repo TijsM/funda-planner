@@ -49,7 +49,10 @@ test.describe('the Add tray', () => {
 
     for (const k of ['draw:wall', 'draw:room', 'draw:note', 'draw:arrow', 'draw:measure'])
       await expect(page.locator(`.tile[data-kind="${k}"]`)).toBeVisible();
-    expect(await page.locator('#trayBody .tile').count()).toBe(91);
+    const tiles = await page.locator('#trayBody .tile').count();
+    expect(tiles).toBeGreaterThanOrEqual(120);           // 5 draw tools + the catalogue
+    for (const k of ['potM', 'potL', 'gpotR', 'firepit', 'rugRound'])
+      await expect(page.locator(`.tile[data-kind="${k}"]`)).toHaveCount(1);
 
     await page.locator('#traySearch').fill('bed');
     await page.waitForTimeout(150);
@@ -278,5 +281,155 @@ test.describe('undo, redo, keyboard', () => {
     await page.waitForTimeout(200);
     expect((await floorOf(page)).names).toContain('Bad');
     expect((await S(page)).floors[0].areas).toBe(2);     // nothing extra created
+  });
+});
+
+test.describe('object labels', () => {
+  test('every placed object is labelled with its name', async ({ page }) => {
+    await starter(page);
+    await addFromTray(page, 'chair', 620, 380);
+    await addFromTray(page, 'desk', 780, 380);
+    const items = await page.evaluate(() => window.__S.proj.floors[0].items.map(i => i.label));
+    expect(items).toEqual(['Chair', 'Desk']);
+  });
+
+  test('the label is editable straight from the object toolbar', async ({ page }) => {
+    await starter(page);
+    await addFromTray(page, 'desk', 700, 400);
+    const fld = page.locator('#ctxLabel');
+    await expect(fld).toBeVisible();
+    await expect(fld).toHaveValue('Desk');
+
+    await fld.fill("Tijs' bureau");
+    await page.waitForTimeout(250);
+    expect(await page.evaluate(() => window.__S.proj.floors[0].items[0].label)).toBe("Tijs' bureau");
+
+    // clearing it means "show nothing", and that survives a reselect
+    await page.locator('#ctxLabel').fill('');
+    await page.waitForTimeout(250);
+    expect(await page.evaluate(() => window.__S.proj.floors[0].items[0])).toMatchObject({ label: '', noLabel: 1 });
+    await clickPlan(page, 60, 60);
+    await page.waitForTimeout(150);
+    const p = await screenOf(page, ...Object.values(await page.evaluate(() => {
+      const i = window.__S.proj.floors[0].items[0]; return [i.x, i.y];
+    })));
+    await clickPlan(page, p.x, p.y);
+    await expect(page.locator('#ctxLabel')).toHaveValue('');
+  });
+
+  test('the label is drawn on the plan and survives a save', async ({ page }) => {
+    await starter(page);
+    await addFromTray(page, 'bed140', 700, 420);
+    await page.locator('#ctxLabel').fill('Logeerbed');
+    await page.waitForTimeout(250);
+    await page.locator('#btnSave').click();
+    await page.waitForTimeout(400);
+
+    // it reaches the canvas: dark label pixels appear over the object
+    const drawn = await page.evaluate(() => {
+      const c = document.querySelector('#cv');
+      const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+      let dark = 0;
+      for (let i = 0; i < d.length; i += 4) if (d[i] < 90 && d[i + 1] < 90 && d[i + 2] < 90) dark++;
+      return dark;
+    });
+    expect(drawn).toBeGreaterThan(50);
+
+    await page.locator('#btnLib').click();
+    await page.locator('#libList .lib-i [data-act=open]').click();
+    await page.waitForTimeout(500);
+    expect(await page.evaluate(() => window.__S.proj.floors[0].items[0].label)).toBe('Logeerbed');
+  });
+
+  test('the label reaches the image-generator prompt', async ({ page }) => {
+    await starter(page);
+    await addFromTray(page, 'sofa3', 700, 400);
+    await page.locator('#ctxLabel').fill('Grote hoekbank');
+    await page.waitForTimeout(250);
+    await page.locator('#btnAI').click();
+    await page.waitForTimeout(400);
+    expect(await page.locator('#aiPrompt').inputValue()).toContain('grote hoekbank');
+  });
+});
+
+test.describe('decoration and axis-locked rulers', () => {
+  test('round plants and decoration are in the tray and place correctly', async ({ page }) => {
+    await starter(page);
+    await addFromTray(page, 'potL', 700, 380);
+    await addFromTray(page, 'gpotR', 820, 380);
+    const items = await page.evaluate(() => window.__S.proj.floors[0].items.map(i => ({ k: i.kind, l: i.label, w: i.w, h: i.h })));
+    expect(items).toEqual([
+      { k: 'potL', l: 'Plant, large', w: 85, h: 85 },
+      { k: 'gpotR', l: 'Round planter', w: 80, h: 80 },
+    ]);
+    // round objects are square-footprint, so rotating must not change the box
+    await page.locator('#ctxRot').click();
+    await page.waitForTimeout(150);
+    const after = await page.evaluate(() => window.__S.proj.floors[0].items[1]);
+    expect(after.w).toBe(after.h);
+  });
+
+  test('the decoration group is browsable and searchable', async ({ page }) => {
+    await starter(page);
+    await page.locator('#fAdd').click();
+    await expect(page.locator('.tgroup .lbl', { hasText: 'Decoration' })).toBeVisible();
+    await page.locator('#traySearch').fill('plant');
+    await page.waitForTimeout(200);
+    const names = (await page.locator('#trayBody .tile b').allInnerTexts()).join(' | ');
+    expect(names).toMatch(/Plant pot|Plant, medium|Plant, large/);
+  });
+
+  test('shift locks a ruler end to the axis', async ({ page }) => {
+    await starter(page);
+    await addFromTray(page, 'draw:measure', 700, 500);
+    const d0 = await page.evaluate(() => window.__S.proj.floors[0].dims[0]);
+    expect(d0.a.y).toBe(d0.b.y);                       // starts horizontal
+
+    const S0 = await page.evaluate(() => ({ z: window.__S.zoom, px: window.__S.px, py: window.__S.py }));
+    const scr = (x, y) => ({ x: x * S0.z + S0.px, y: y * S0.z + S0.py });
+    const end = scr(d0.b.x, d0.b.y);
+
+    // drag the end well off-axis WITHOUT shift — it follows the pointer
+    await dragPlan(page, end.x, end.y, end.x + 100, end.y + 90);
+    let d = await page.evaluate(() => window.__S.proj.floors[0].dims[0]);
+    expect(Math.abs(d.b.y - d.a.y)).toBeGreaterThan(20);
+
+    // put it back, then drag the same distance holding shift — y must not move
+    await page.keyboard.press('ControlOrMeta+z');
+    await page.waitForTimeout(200);
+    d = await page.evaluate(() => window.__S.proj.floors[0].dims[0]);
+    const e2 = scr(d.b.x, d.b.y);
+    await page.keyboard.down('Shift');
+    await dragPlan(page, e2.x, e2.y, e2.x + 100, e2.y + 90);
+    await page.keyboard.up('Shift');
+    d = await page.evaluate(() => window.__S.proj.floors[0].dims[0]);
+    expect(d.b.y).toBe(d.a.y);                          // locked to the axis
+    expect(d.b.x).toBeGreaterThan(d0.b.x);              // but it did extend
+  });
+
+  test('shift also locks a wall end', async ({ page }) => {
+    await starter(page);
+    await addFromTray(page, 'draw:wall', 700, 520);
+    const w0 = await page.evaluate(() => window.__S.proj.floors[0].walls.at(-1));
+    const S0 = await page.evaluate(() => ({ z: window.__S.zoom, px: window.__S.px, py: window.__S.py }));
+    const end = { x: w0.b.x * S0.z + S0.px, y: w0.b.y * S0.z + S0.py };
+    await page.keyboard.down('Shift');
+    await dragPlan(page, end.x, end.y, end.x + 60, end.y + 120);
+    await page.keyboard.up('Shift');
+    const w = await page.evaluate(() => window.__S.proj.floors[0].walls.at(-1));
+    // The axis is measured from the end that stays put. This wall is 3 m long
+    // horizontally, so a 120 px vertical nudge does not out-reach it: it stays
+    // horizontal and simply extends.
+    expect(w.b.y).toBe(w.a.y);
+    expect(w.b.x).toBeGreaterThan(w0.b.x);
+
+    // pull far enough vertically and it flips to the other axis
+    const S1 = await page.evaluate(() => ({ z: window.__S.zoom, px: window.__S.px, py: window.__S.py }));
+    const e2 = { x: w.b.x * S1.z + S1.px, y: w.b.y * S1.z + S1.py };
+    await page.keyboard.down('Shift');
+    await dragPlan(page, e2.x, e2.y, e2.x - 20, e2.y + 420);
+    await page.keyboard.up('Shift');
+    const w2 = await page.evaluate(() => window.__S.proj.floors[0].walls.at(-1));
+    expect(w2.b.x).toBe(w2.a.x);
   });
 });

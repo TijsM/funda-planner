@@ -79,10 +79,16 @@ Copy either to the clipboard, or download the image.
 
 ## The rest
 
-- 86 furniture and garden objects at real dimensions, across Living, Dining, Bedroom, Kitchen,
-  Bathroom, Structure and **Garden** (trees, terrace, pool, pergola, hedge, shed…).
+- 120 objects at real dimensions, across Living, Dining, Bedroom, Kitchen, Bathroom, Structure,
+  **Decoration** (round plant pots in four sizes, pot clusters, hanging plants, planter boxes, round
+  rugs, artwork, screens, baskets…) and **Garden** (round planters, raised round beds, fire pit,
+  bird bath, water feature, hammock, stepping stones, trees, terrace, pool, pergola, shed…).
+- Every object you place is labelled with its name; click it and edit the label right on the object,
+  or clear it to hide it.
 - Every floor of the listing, as chips along the bottom.
 - Snapping to a 5 cm grid and to existing endpoints, 15° angle snap, undo/redo, arrow-key nudging.
+- Hold **shift** while dragging the end of a ruler, wall or arrow to lock it to the axis (measured
+  from the end that stays put), or while dragging an object to constrain it to one direction.
 - Save to an in-browser library with thumbnails; export/import `.json`; export the current floor
   as a PNG with a title block, or as a prompt + reference image for an image generator.
 - Autosaves, and reopens where you left off.
@@ -96,7 +102,7 @@ below · `A` Add tray (Simple) · `⌘Z` / `⇧⌘Z` undo, redo · `⌘D` duplic
 
 ## Tests
 
-Playwright, driving the real file in Chrome — 60 tests, ~45 s.
+Playwright, driving the real file in Chrome — 68 tests, ~50 s.
 
 ```
 cd tests && npm install && npm test
