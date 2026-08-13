@@ -1,0 +1,12 @@
+{
+  "name": "plattegrond-studio-tests",
+  "private": true,
+  "scripts": {
+    "test": "playwright test",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1"
+  },
+  "type": "module"
+}

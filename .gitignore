@@ -1,0 +1,9 @@
+# test runner output
+node_modules/
+playwright-report/
+test-results/
+results.json
+*.log
+
+# macOS
+.DS_Store
