@@ -149,3 +149,26 @@ Each step ships and leaves the app working.
 - GraphQL, microservices, a heavy state library, or a design system.
 - Real-time multiplayer. If it becomes a requirement, the document is already a plain JSON tree, so
   Yjs can be layered on the store without touching the renderer.
+
+---
+
+## Next 16 notes
+
+The scaffold is Next 16 / React 19, which differs from a lot of published advice.
+`next dev` writes an `AGENTS.md` pointing at `node_modules/next/dist/docs/` — read
+those before writing framework code rather than trusting memory. Checked against
+them so far:
+
+- `output: 'export'` plus `images: { unoptimized: true }` is still the documented
+  static-export path, so the Pages deploy is fine.
+- `export const metadata` / `export const viewport` are current.
+- Turbopack is the default bundler.
+
+Two that will bite during the steps above:
+
+- **`middleware` is renamed to `proxy`.** Clerk's auth guard is normally a
+  `middleware.ts`; on 16 that file is `proxy.ts` exporting `proxy`, and it runs on
+  the Node runtime only — the `edge` runtime is not supported there.
+- **Request APIs are async.** `params`, `searchParams`, `cookies()` and `headers()`
+  must be awaited. Nothing in the editor touches them yet, but every route added
+  for billing, renders and the Funda proxy will.
