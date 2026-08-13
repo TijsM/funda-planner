@@ -11,11 +11,22 @@ export const FUNDA_URL = 'https://www.funda.nl/detail/koop/rosmalen/huis-pieter-
 /* ── a clean, deterministic app on every test ──────────────────── */
 export async function fresh(page, opts = {}) {
   const errors = [];
-  /* the browser's own /favicon.ico probe is not the app's doing */
-  const noise = t => /favicon/i.test(t);
+  /* Generic "Failed to load resource" carries no URL, and the font CDN blips.
+     So drop that noise here and assert on the request log instead, which does
+     know the URL — a real app-origin 404 still fails the test. */
+  const THIRD_PARTY = /fonts\.(googleapis|gstatic)\.com|favicon/i;
+  const noise = t => /favicon/i.test(t) || /Failed to load resource/i.test(t);
   page.on('console', m => { if (m.type() === 'error' && !noise(m.text())) errors.push(m.text()); });
   page.on('pageerror', e => errors.push('pageerror: ' + e.message));
+  /* The app guards unsaved work with a beforeunload prompt — correct
+     behaviour, but it blocks page.goto(). Accept only that dialog; leave
+     confirm()s to whichever test registered a handler for them. */
+  page.on('dialog', async d => { if (d.type() === 'beforeunload') { try { await d.accept(); } catch (e) { } } });
+
+  const bad = [];
+  page.on('response', r => { if (r.status() >= 400 && !THIRD_PARTY.test(r.url())) bad.push(r.status() + ' ' + r.url()); });
   page.errors = errors;
+  page.badRequests = bad;
 
   /* Clear storage ONCE per test, not on every navigation — otherwise reload
      and autosave behaviour can never be observed. sessionStorage is per-tab
@@ -89,6 +100,16 @@ export async function starter(page, which = 'new') {
   await page.goto(appUrl(which));
   await page.waitForFunction(() => window.__S && window.__S.proj);
   await page.waitForTimeout(200);
+}
+
+/* anything the app itself asked for and did not get */
+export const appFailures = page => page.badRequests || [];
+
+/* The importer opens whenever there is no session to restore, and it covers
+   the top bar. Anything driving the top bar after a reload must clear it. */
+export async function dismissModal(page) {
+  const ov = page.locator('.ov.open:not(.pass)');
+  if (await ov.count()) { await page.keyboard.press('Escape'); await page.waitForTimeout(150); }
 }
 
 /* click an existing object on the canvas by its world position */

@@ -548,6 +548,32 @@ textarea.src:focus{border-color:var(--vermilion)}
 .ctx .swrow{display:flex;gap:4px;padding:0 4px}
 .ctx .val{font:500 12px/1 var(--mono);color:var(--cyan);padding:0 6px;min-width:52px;text-align:center}
 
+/* ---------- image-generator export ---------- */
+.modal.ai{max-width:1000px}
+.ai-b{display:grid;grid-template-columns:1fr 340px;gap:20px;align-items:start}
+.ai-left{min-width:0}
+.ai-right{min-width:0;display:flex;flex-direction:column;gap:8px}
+.ai-prev{
+  border:1px solid var(--line-hi);border-radius:6px;overflow:hidden;background:var(--paper);
+  display:grid;place-items:center;min-height:200px;
+}
+.ai-prev img{width:100%;height:auto;display:block}
+.seg{display:inline-flex;border:1px solid var(--line-hi);border-radius:5px;overflow:hidden;flex:1}
+.seg button{
+  flex:1;height:27px;padding:0 10px;font:500 11px/1 var(--sans);color:var(--tx-3);
+  background:#00000026;border-right:1px solid var(--line);transition:.13s;white-space:nowrap;
+}
+.seg button:last-child{border-right:none}
+.seg button:hover{color:var(--tx);background:#ffffff0f}
+.seg button.on{background:linear-gradient(180deg,#EE6E34,#C6511F);color:#fff}
+.fld select{
+  flex:1;min-width:0;font:500 11.5px/1 var(--mono);color:var(--tx);background:transparent;
+  border:none;outline:none;height:100%;cursor:pointer;
+}
+.fld select option{background:#221E19;color:var(--tx)}
+#aiPrompt{height:250px;line-height:1.55;color:var(--tx)}
+@media (max-width:900px){.ai-b{grid-template-columns:1fr}}
+
 /* first-run coach marks */
 .coach{
   position:absolute;left:50%;bottom:16px;translate:-50% 0;z-index:55;
@@ -597,6 +623,7 @@ textarea.src:focus{border-color:var(--vermilion)}
  <symbol id="i-flip" viewBox="0 0 24 24"><path d="M12 3v18" stroke="currentColor" stroke-width="1.5" stroke-dasharray="3 2.5"/><path d="M9 6L3 12l6 6zM15 6l6 6-6 6z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol>
  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.8-6.5 10-6.5S22 12 22 12s-3.8 6.5-10 6.5S2 12 2 12z" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="12" r="2.8" fill="none" stroke="currentColor" stroke-width="1.6"/></symbol>
  <symbol id="i-layer" viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M3 13l9 5 9-5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></symbol>
+ <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 2.5l2.1 5.6 5.6 2.1-5.6 2.1L12 17.9l-2.1-5.6L4.3 10.2l5.6-2.1z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M18.5 15.5l.9 2.4 2.4.9-2.4.9-.9 2.4-.9-2.4-2.4-.9 2.4-.9z" fill="currentColor" opacity=".75"/></symbol>
  <symbol id="i-house" viewBox="0 0 24 24"><path d="M3 11l9-7 9 7v9a1 1 0 01-1 1h-5v-7H9v7H4a1 1 0 01-1-1z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol>
 </defs>
 </svg>
@@ -619,6 +646,7 @@ textarea.src:focus{border-color:var(--vermilion)}
     <button class="btn ghost pro-only" id="btnExpJson" title="Export project as .json"><svg><use href="#i-dl"/></svg>JSON</button>
     <button class="btn ghost pro-only" id="btnImpJson" title="Import a .json project"><svg><use href="#i-ul"/></svg></button>
     <button class="btn ghost" id="btnExpPng" title="Export current floor as PNG"><svg><use href="#i-img"/></svg>PNG</button>
+    <button class="btn" id="btnAI" title="Export a prompt + reference image for an image generator"><svg><use href="#i-spark"/></svg>Render</button>
     <div class="sep"></div>
     <div class="modesw">
       <button id="mSimple" class="on" title="Meeting mode — big canvas, one Add tray, no panels">Simple</button>
@@ -795,6 +823,49 @@ textarea.src:focus{border-color:var(--vermilion)}
     <div class="m-f"><div class="spring"></div>
       <button class="btn" data-close>Cancel</button>
       <button class="btn pri" id="calApply" disabled><svg><use href="#i-check"/></svg>Apply scale</button></div>
+  </div>
+</div>
+
+<!-- ============== IMAGE-GENERATOR EXPORT ============== -->
+<div class="ov" id="ovAI">
+  <div class="modal ai">
+    <div class="m-h">
+      <div style="flex:1"><h2>Render this plan</h2>
+        <p>A prompt written from the actual geometry, plus a clean reference image to attach.</p></div>
+      <button class="m-x" data-close><svg><use href="#i-x"/></svg></button>
+    </div>
+    <div class="m-b ai-b">
+      <div class="ai-left">
+        <div class="row" style="margin-bottom:10px"><span class="lbl">View</span>
+          <div class="seg" id="aiView">
+            <button data-v="top" class="on">Top-down</button>
+            <button data-v="eye">Eye level</button>
+            <button data-v="iso">Isometric</button>
+            <button data-v="sketch">Sketch</button>
+          </div></div>
+        <div class="row" style="margin-bottom:10px"><span class="lbl">Room</span>
+          <div class="fields"><div class="fld wide"><select id="aiRoom"></select></div></div></div>
+        <div class="row" style="margin-bottom:2px"><span class="lbl">Style</span>
+          <div class="fields"><div class="fld wide"><input id="aiStyle" placeholder="e.g. Scandinavian, warm oak, matte black accents" spellcheck="false"></div></div></div>
+        <label class="tg"><input type="checkbox" id="aiFurn" checked><span class="sw2"></span><span>List the furniture</span></label>
+        <label class="tg"><input type="checkbox" id="aiDims" checked><span class="sw2"></span><span>Include measurements</span></label>
+        <label class="tg"><input type="checkbox" id="aiLabels"><span class="sw2"></span><span>Room names on the image</span></label>
+        <textarea class="src" id="aiPrompt" spellcheck="false" style="height:250px;margin-top:10px"></textarea>
+        <div class="hint" id="aiCount" style="margin-top:6px"></div>
+      </div>
+      <div class="ai-right">
+        <span class="lbl">Reference image</span>
+        <div class="ai-prev"><img id="aiImg" alt="clean floor plan reference"></div>
+        <div class="hint">Attach this to the generator alongside the prompt so it copies the exact layout.</div>
+      </div>
+    </div>
+    <div class="m-f">
+      <button class="btn" id="aiRegen"><svg><use href="#i-rot"/></svg>Rebuild prompt</button>
+      <div class="spring"></div>
+      <button class="btn" id="aiCopyImg"><svg><use href="#i-copy"/></svg>Copy image</button>
+      <button class="btn" id="aiDlImg"><svg><use href="#i-dl"/></svg>Image</button>
+      <button class="btn pri" id="aiCopy"><svg><use href="#i-copy"/></svg>Copy prompt</button>
+    </div>
   </div>
 </div>
 
@@ -1173,7 +1244,9 @@ function stepUI(list) {
 }
 
 function parseFundaSource(html) {
-  const h = html.replace(/\\u002F/gi, '/').replace(/\\\//g, '/').replace(/&amp;/g, '&');
+  const h = html
+    .replace(/<!--[\s\S]*?-->/g, ' ')            /* a commented-out tag is not a tag */
+    .replace(/\\u002F/gi, '/').replace(/\\\//g, '/').replace(/&amp;/g, '&');
   const out = { projectId: null, plans: [], address: null, title: null };
 
   const rx = /"(?:[^"]*?)listing-management\/([0-9a-f-]{36})"\s*,\s*"([^"]{1,80})"\s*,\s*"https:\/\/fmlpub[^"]*?designId=(\d+)&projectId=(\d+)"/g;
@@ -1188,7 +1261,8 @@ function parseFundaSource(html) {
     while ((m = rx2.exec(h))) if (!out.plans.some(p => p.designId === +m[1])) out.plans.push({ img: null, name: '', designId: +m[1], projectId: +m[2] });
   }
 
-  const t = h.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || h.match(/"(?:og:)?title"\s*[,:]\s*"([^"]{10,160})"/i);
+  /* [^<] so a stray opening tag can never make the title swallow the page */
+  const t = h.match(/<title[^>]*>([^<]{1,300})<\/title>/i) || h.match(/"(?:og:)?title"\s*[,:]\s*"([^"]{10,160})"/i);
   if (t) {
     out.title = t[1].replace(/\s+/g, ' ').trim();
     out.address = out.title.replace(/\s*\|\s*Funda.*$/i, '').replace(/^[^:]{0,40}:\s*/, '').trim();
@@ -3358,11 +3432,282 @@ function initSimple() {
     if (S.simple && (e.key === 'a' || e.key === 'A') && !e.metaKey && !e.ctrlKey) { e.preventDefault(); toggleTray(); }
   });
 
+  initAI();
   renderTray();
   let mode = 'simple';
   try { mode = localStorage.getItem(LS_MODE) || 'simple'; } catch (e) { }
   applyMode(mode !== 'pro', true);
   showCoach();
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   EXPORT FOR AN IMAGE GENERATOR
+   Two artefacts: a prompt written from the real geometry, and a clean
+   reference bitmap to attach so the model copies the exact layout.
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* top of the plan is north — the convention every floor plan already uses */
+function compass(p, b) {
+  const w = Math.max(1, b.x1 - b.x0), h = Math.max(1, b.y1 - b.y0);
+  const fx = (p.x - b.x0) / w, fy = (p.y - b.y0) / h;
+  const ns = fy < .34 ? 'north' : fy > .66 ? 'south' : '';
+  const ew = fx < .34 ? 'west' : fx > .66 ? 'east' : '';
+  return ns && ew ? ns + '-' + ew : ns || ew || 'central';
+}
+const m2 = cm => (cm / 100).toFixed(1);
+
+/* everything the prompt needs, derived from the model */
+function planFacts(f) {
+  /* Orient against the building — walls and rooms only. Using the full content
+     bbox would let a chair dropped off the edge rotate every room's compass. */
+  const shell = [];
+  f.walls.forEach(w => shell.push(w.a, w.b));
+  f.areas.forEach(a => shell.push(...a.poly));
+  const b = shell.length ? bboxOf(shell)
+    : (contentBBox({ ...f, notes: [], ref: null }) || { x0: 0, y0: 0, x1: 100, y1: 100 });
+  const rooms = f.areas
+    .map(a => ({ a, name: (a.name || '').trim(), area: polyArea(a.poly), c: polyCentroid(a.poly) }))
+    .filter(r => r.name && r.area > 10000)                    /* ignore cupboards < 1 m² */
+    .sort((x, y) => y.area - x.area);
+
+  const used = new Set();
+  rooms.forEach(r => {
+    r.items = f.items.filter(i => {
+      if (used.has(i.id) || i.fromFunda) return false;
+      if (!pointInPoly({ x: i.x, y: i.y }, r.a.poly)) return false;
+      used.add(i.id); return true;
+    });
+    /* fitted units imported from the listing — kitchen runs, sanitary ware —
+       are not loose furniture, but a room holding them is not "unfurnished" */
+    r.fitted = f.items.filter(i => i.fromFunda && pointInPoly({ x: i.x, y: i.y }, r.a.poly)).length;
+    const w = compass(r.c, b);
+    r.where = w === 'central' ? 'centrally placed' : `on the ${w} side`;
+  });
+  const loose = f.items.filter(i => !used.has(i.id) && !i.fromFunda);
+
+  const windows = [], doors = [];
+  f.walls.forEach(w => (w.openings || []).forEach(o => {
+    const n = unitNormal(w.a, w.b), t = clamp(o.at, 0, 1) * n.L;
+    const p = { x: w.a.x + n.ux * t, y: w.a.y + n.uy * t };
+    (o.type === 'window' ? windows : doors).push(compass(p, b));
+  }));
+  const tally = arr => {
+    const c = {}; arr.forEach(s => c[s] = (c[s] || 0) + 1);
+    return Object.entries(c).sort((a, b2) => b2[1] - a[1]);
+  };
+  return {
+    b, rooms, loose, doors: doors.length,
+    windowSides: tally(windows),
+    w: (b.x1 - b.x0) / 100, h: (b.y1 - b.y0) / 100,
+    total: f.areas.reduce((s, a) => s + polyArea(a.poly), 0),
+    notes: f.notes.map(n => String(n.text).replace(/\s+/g, ' ').trim())
+      .filter(t => t && !/geen rechten|©|zibber/i.test(t)),
+  };
+}
+
+const AI_VIEWS = {
+  top: {
+    label: 'top-down',
+    lead: 'Photorealistic top-down (bird\'s-eye) architectural visualisation of the furnished floor plan below, ceiling removed.',
+    cam: 'Camera directly overhead, orthographic-looking, the whole floor filling the frame, walls cut cleanly at about 1.2 m height.',
+  },
+  eye: {
+    label: 'eye-level',
+    lead: 'Photorealistic wide-angle interior photograph of the space described below.',
+    cam: 'Camera at standing eye level (about 1.6 m), 24 mm lens, positioned in the {ROOM} looking across the room towards the windows.',
+  },
+  iso: {
+    label: 'isometric',
+    lead: 'A 3D isometric cutaway "dollhouse" view of the furnished floor plan below, ceiling removed.',
+    cam: 'Isometric camera at roughly 45°, the whole floor visible, walls cut at about 1.2 m, soft studio lighting, clean architectural-model look.',
+  },
+  sketch: {
+    label: 'sketch',
+    lead: 'A hand-drawn watercolour and ink architectural illustration of the floor plan below, seen from above.',
+    cam: 'Loose confident linework, washes of colour, generous white paper margin, the feel of an architect\'s presentation sketch.',
+  },
+};
+
+function buildPrompt(opts) {
+  const f = floor(); if (!f) return '';
+  const F = planFacts(f);
+  const V = AI_VIEWS[opts.view] || AI_VIEWS.top;
+  const only = opts.room && opts.room !== '*' ? F.rooms.find(r => r.a.id === opts.room) : null;
+  const rooms = only ? [only] : F.rooms;
+  const dim = opts.dims;
+  const L = [];
+
+  const addr = (S.proj.source && S.proj.source.address) || S.proj.name;
+  L.push(V.lead, '');
+
+  L.push('SUBJECT');
+  L.push(only
+    ? `The ${only.name} of ${addr} — ${m2(Math.sqrt(only.area) * 10)} m² room${dim ? ` of ${(only.area / 10000).toFixed(1)} m²` : ''}, on the ${f.name.toLowerCase()}.`
+    : `${addr} — "${f.name}"${dim ? `, ${(F.total / 10000).toFixed(1)} m² over ${F.rooms.length} named rooms, overall footprint ${F.w.toFixed(1)} × ${F.h.toFixed(1)} m` : ''}.`);
+  L.push('North is at the top of the plan.');
+  L.push('');
+
+  L.push(only ? 'THE ROOM' : 'LAYOUT — reproduce exactly, do not invent or omit rooms');
+  rooms.forEach(r => {
+    const bits = [`${r.name}`];
+    if (dim) bits.push(`${(r.area / 10000).toFixed(1)} m²`);
+    if (!only) bits.push(r.where);
+    let line = '- ' + bits.join(', ') + '.';
+    if (opts.furn) {
+      if (r.items.length) {
+        line += ' Contains: ' + r.items.map(i => {
+          const c = CAT_BY_KIND[i.kind];
+          const nm = (i.label || (c && c.name) || 'object').toLowerCase();
+          return dim ? `${nm} (${Math.round(i.w)}×${Math.round(i.h)} cm)` : nm;
+        }).join(', ') + '.';
+      } else if (r.fitted) {
+        line += ' Fitted units already in place (as drawn); no loose furniture.';
+      } else {
+        line += ' Empty — furnish it plausibly for its purpose.';
+      }
+    }
+    L.push(line);
+  });
+  if (!only && opts.furn && F.loose.length) {
+    L.push('- Elsewhere on the floor: ' + F.loose.map(i => {
+      const c = CAT_BY_KIND[i.kind];
+      return (i.label || (c && c.name) || 'object').toLowerCase();
+    }).join(', ') + '.');
+  }
+  L.push('');
+
+  if (!only) {
+    L.push('OPENINGS AND LIGHT');
+    if (F.windowSides.length) {
+      const many = F.windowSides.some(([, n]) => n > 1);
+      const sides = F.windowSides.map(([s, n]) => many ? `${s} (${n})` : s);
+      const list = sides.length > 1 ? sides.slice(0, -1).join(', ') + ' and ' + sides.at(-1) : sides[0];
+      L.push(`Windows on the ${list} side${sides.length > 1 ? 's' : ''} — daylight comes from ${sides.length > 1 ? 'those directions' : 'that direction'}.`);
+    } else L.push('No windows are marked; light the space naturally and evenly.');
+    L.push(`${F.doors} doorway${F.doors === 1 ? '' : 's'} connect the rooms. Do not add windows or doors that are not listed.`);
+    L.push('');
+  }
+
+  if (opts.style && opts.style.trim()) {
+    L.push('STYLE'); L.push(opts.style.trim()); L.push('');
+  }
+  if (F.notes.length) {
+    L.push('NOTES FROM THE PLAN'); F.notes.slice(0, 8).forEach(n => L.push('- ' + n)); L.push('');
+  }
+
+  L.push('RENDER');
+  L.push(V.cam.replace('{ROOM}', (rooms[0] && rooms[0].name) || 'main room'));
+  if (opts.view !== 'sketch') L.push('Natural daylight, realistic materials and shadows, high detail, no people, no text or labels anywhere in the image.');
+  else L.push('No photographic realism, no text or labels in the image.');
+  L.push('');
+  L.push('Match the attached floor plan image exactly: same room shapes, same proportions, same relative positions. Do not add, remove or rearrange walls.');
+
+  return L.join('\n');
+}
+
+/* ── the clean reference bitmap ─────────────────────────────────── */
+function renderClean(opts) {
+  const f = floor(); if (!f) return null;
+  const b = contentBBox({ ...f, notes: [], ref: null });
+  if (!b) return null;
+  const pad = 40, wCm = (b.x1 - b.x0) + pad * 2, hCm = (b.y1 - b.y0) + pad * 2;
+  const zoom = clamp(1800 / Math.max(wCm, hCm), .15, 6);
+  const cv = document.createElement('canvas');
+  cv.width = Math.round(wCm * zoom); cv.height = Math.round(hCm * zoom);
+
+  const keep = { grid: S.grid, ref: S.showRef, ghost: S.ghost, view: { ...S.view } };
+  S.grid = false; S.showRef = false; S.ghost = false;
+  S.view = { rooms: 1, areas: 0, furn: opts.furn ? 1 : 0, dims: 0, notes: 0 };
+  const labels = !!opts.labels;
+  if (!labels) f.areas.forEach(a => { a.__lbl = a.label; a.label = false; });
+  try {
+    paint(cv.getContext('2d'), cv.width, cv.height,
+      { zoom, px: (-b.x0 + pad) * zoom, py: (-b.y0 + pad) * zoom },
+      { dpr: 1, grid: false, floor: f });
+  } finally {
+    if (!labels) f.areas.forEach(a => { a.label = a.__lbl; delete a.__lbl; });
+    S.grid = keep.grid; S.showRef = keep.ref; S.ghost = keep.ghost; S.view = keep.view;
+    draw();
+  }
+  return cv;
+}
+
+/* ── modal ──────────────────────────────────────────────────────── */
+const AI = { view: 'top', room: '*' };
+let aiCanvas = null;
+
+function aiOpts() {
+  return {
+    view: AI.view, room: $('#aiRoom').value || '*',
+    style: $('#aiStyle').value, furn: $('#aiFurn').checked,
+    dims: $('#aiDims').checked, labels: $('#aiLabels').checked,
+  };
+}
+function aiRefresh(regenPrompt) {
+  const o = aiOpts();
+  if (regenPrompt !== false) $('#aiPrompt').value = buildPrompt(o);
+  const p = $('#aiPrompt').value;
+  $('#aiCount').textContent = p.length + ' characters · ' + p.split(/\n/).length + ' lines';
+  aiCanvas = renderClean(o);
+  if (aiCanvas) $('#aiImg').src = aiCanvas.toDataURL('image/png');
+}
+function openAI() {
+  if (!S.proj) return toast('Import or start a plan first.', 'err');
+  const f = floor();
+  const named = f.areas.filter(a => (a.name || '').trim() && polyArea(a.poly) > 10000);
+  $('#aiRoom').innerHTML = '<option value="*">Whole floor — ' + escapeHtml(f.name) + '</option>' +
+    named.map(a => `<option value="${a.id}">${escapeHtml(a.name)} — ${fmtM2(polyArea(a.poly))} m²</option>`).join('');
+  /* if a room is selected on the canvas, start from that */
+  const sel = selObjects().find(s => s.t === 'area');
+  if (sel && named.some(a => a.id === sel.o.id)) $('#aiRoom').value = sel.o.id;
+  open$('#ovAI');
+  aiRefresh(true);
+}
+
+async function copyText(t) {
+  try { await navigator.clipboard.writeText(t); return true; } catch (e) { return false; }
+}
+
+function initAI() {
+  $('#btnAI').onclick = openAI;
+  $$('#aiView button').forEach(b => b.onclick = () => {
+    AI.view = b.dataset.v;
+    $$('#aiView button').forEach(x => x.classList.toggle('on', x === b));
+    aiRefresh(true);
+  });
+  ['#aiRoom', '#aiFurn', '#aiDims', '#aiLabels'].forEach(s => $(s).onchange = () => aiRefresh(true));
+  $('#aiStyle').oninput = () => aiRefresh(true);
+  $('#aiStyle').onkeydown = e => e.stopPropagation();
+  $('#aiPrompt').onkeydown = e => e.stopPropagation();
+  $('#aiPrompt').oninput = () => aiRefresh(false);
+  $('#aiRegen').onclick = () => aiRefresh(true);
+
+  $('#aiCopy').onclick = async () => {
+    const ok = await copyText($('#aiPrompt').value);
+    if (ok) toast('Prompt copied — paste it into your image generator.', 'ok');
+    else { $('#aiPrompt').select(); toast('Could not reach the clipboard — the prompt is selected, press ⌘C.', 'err'); }
+  };
+  $('#aiCopyImg').onclick = async () => {
+    if (!aiCanvas) return;
+    try {
+      const blob = await new Promise(r => aiCanvas.toBlob(r, 'image/png'));
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+      toast('Reference image copied — paste it alongside the prompt.', 'ok');
+    } catch (e) {
+      toast('Clipboard refused the image. Use the Image button to download it instead.', 'err');
+    }
+  };
+  $('#aiDlImg').onclick = () => {
+    if (!aiCanvas) return;
+    aiCanvas.toBlob(blob => {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      /* suffix after slugging — slug() truncates, and it would eat it */
+      a.download = slug(S.proj.name + '-' + floor().name) + '-reference.png';
+      a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+      toast('Reference image saved.', 'ok');
+    }, 'image/png');
+  };
 }
 
 window.__S = S; window.__paint = paint; window.__contentBBox = contentBBox;

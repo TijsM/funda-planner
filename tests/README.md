@@ -16,6 +16,7 @@ Playwright, driving the real single-file app in Chrome.
 | `02-simple` | the meeting UI: floor chips, the Add tray (filtering, click-to-arm, drag-to-drop), placing and editing furniture / walls / doors / rooms / notes / arrows / measures entirely from the on-object toolbar, dragging to move, undo/redo, keyboard |
 | `03-pro` | mode switching and persistence, the drawing tools, the inspector's numeric fields, marquee + multi-select, zoom/fit/layer toggles, floor add & delete |
 | `04-persistence` | save → wipe → reload from the library (incl. thumbnail rendering), delete/clear, autosave restore, JSON export→import round-trip, corrupt-file handling, PNG export (real PNG header + dimensions), reference-image toggle |
+| `06-ai-export` | the image-generator export: prompt built from real geometry (rooms, areas, orientation, windows, furniture), the four viewpoints, single-room scoping, the furniture/measurement toggles, a clean reference image with the dimension lines provably gone, and clipboard + download |
 | `05-file-url` | the same app opened as `file://`, which is how it is actually used — the strictest CORS case (origin `null`) |
 
 ## Determinism

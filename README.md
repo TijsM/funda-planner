@@ -62,6 +62,21 @@ So "put a door here" is: click the wall → click Door.
 **Pro** is one click away, top right: tool rail, inspector with numeric X/Y/W/H, marquee select,
 layer toggles, floor management. The choice is remembered.
 
+## Feeding it to an image generator
+
+**Render** in the top bar produces the two things a generator needs:
+
+- **A prompt written from the actual geometry** — the address and floor, overall footprint, every
+  named room with its area and where it sits on the plan, the furniture actually placed in each one
+  with real dimensions, which sides the windows are on (so the light comes from the right
+  direction), and explicit instructions not to invent walls or rooms. Four viewpoints (top-down,
+  eye level, isometric, watercolour sketch) rewrite it; you can scope it to a single room, add your
+  own style line, and edit the text before copying.
+- **A clean reference image** to attach — the plan with no grid, no dimension lines, no notes and no
+  UI, so the model copies the layout instead of the drawing furniture.
+
+Copy either to the clipboard, or download the image.
+
 ## The rest
 
 - 86 furniture and garden objects at real dimensions, across Living, Dining, Bedroom, Kitchen,
@@ -69,7 +84,7 @@ layer toggles, floor management. The choice is remembered.
 - Every floor of the listing, as chips along the bottom.
 - Snapping to a 5 cm grid and to existing endpoints, 15° angle snap, undo/redo, arrow-key nudging.
 - Save to an in-browser library with thumbnails; export/import `.json`; export the current floor
-  as a PNG with a title block.
+  as a PNG with a title block, or as a prompt + reference image for an image generator.
 - Autosaves, and reopens where you left off.
 - Deep links: `#import=<funda url>`, `#new`, `#garden`.
 
@@ -81,7 +96,7 @@ below · `A` Add tray (Simple) · `⌘Z` / `⇧⌘Z` undo, redo · `⌘D` duplic
 
 ## Tests
 
-Playwright, driving the real file in Chrome — 52 tests, ~40 s.
+Playwright, driving the real file in Chrome — 60 tests, ~45 s.
 
 ```
 cd tests && npm install && npm test

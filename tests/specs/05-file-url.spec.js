@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import path from 'path';
 import { pathToFileURL, fileURLToPath } from 'url';
-import { fresh, S, waitFloors, FUNDA_URL, inkRatio, addFromTray, toast } from './helpers.js';
+import { fresh, S, waitFloors, FUNDA_URL, inkRatio, addFromTray, toast, dismissModal, appFailures } from './helpers.js';
 
 /* The app is meant to be double-clicked. That makes the page origin `null`,
    which is the strictest CORS case there is — so it gets its own suite. */
@@ -28,6 +28,7 @@ test.describe('opened straight from disk (file://)', () => {
     await expect(toast(page, 'Vanaf schijf')).toBeVisible();
 
     expect(errors).toEqual([]);
+    expect(appFailures(page)).toEqual([]);
   });
 
   test('localStorage persists across a file:// reload', async ({ page }) => {
@@ -41,6 +42,7 @@ test.describe('opened straight from disk (file://)', () => {
     await page.goto(FILE_URL + '?n=3');
     await page.waitForFunction(() => window.__S && window.__S.proj);
     await page.waitForTimeout(300);
+    await dismissModal(page);
     await page.locator('#btnLib').click();
     await expect(page.locator('#libList .lib-i')).toContainText('Tuin v1');
   });

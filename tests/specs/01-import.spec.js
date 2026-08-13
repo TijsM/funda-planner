@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import fs from 'fs';
 import path from 'path';
-import { fresh, S, APP, appUrl, toast, FUNDA_URL, FIXTURES, importMocked, starter, waitFloors, inkRatio } from './helpers.js';
+import { fresh, S, APP, appUrl, toast, FUNDA_URL, FIXTURES, importMocked, starter, waitFloors, inkRatio, appFailures } from './helpers.js';
 
 test.describe('boot', () => {
   test('opens in Simple mode with the importer up and no console errors', async ({ page }) => {
@@ -13,6 +13,7 @@ test.describe('boot', () => {
     await expect(page.locator('.panel.right')).toBeHidden();
     await expect(page.locator('#floorbar')).toBeVisible();
     expect(errors).toEqual([]);
+    expect(appFailures(page)).toEqual([]);
   });
 
   test('the three starting routes all work', async ({ page }) => {
@@ -62,7 +63,7 @@ test.describe('Funda import', () => {
 
     // provenance
     expect(s.source.projectId).toBe(187897594);
-    expect(s.source.address).toContain('Pieter Kleijnstraat 19');
+    expect(s.source.address).toBe('Pieter Kleijnstraat 19 5246 GS Rosmalen');
     expect(s.source.url).toBe(FUNDA_URL);
     await expect(page.locator('#addrTag')).toHaveAttribute('href', FUNDA_URL);
 
@@ -72,6 +73,7 @@ test.describe('Funda import', () => {
     for (const [x, y] of bounds) { expect(x).toBeGreaterThanOrEqual(0); expect(y).toBeGreaterThanOrEqual(0); }
 
     expect(errors).toEqual([]);
+    expect(appFailures(page)).toEqual([]);
   });
 
   test('reports each import stage and ends ready', async ({ page }) => {
