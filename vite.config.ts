@@ -1,6 +1,5 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-import path from 'node:path';
 
 /* Static build. The engine has no server dependency yet, so the GitHub Pages
    deploy stays exactly as it is — see docs/ARCHITECTURE.md for when this moves. */
@@ -9,9 +8,9 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
-      '@engine': path.resolve(__dirname, 'src/engine'),
-      '@shell': path.resolve(__dirname, 'src/shell'),
-      '@state': path.resolve(__dirname, 'src/state'),
+      '@engine': new URL('./src/engine', import.meta.url).pathname,
+      '@shell': new URL('./src/shell', import.meta.url).pathname,
+      '@state': new URL('./src/state', import.meta.url).pathname,
     },
   },
   build: { outDir: 'dist', sourcemap: true },

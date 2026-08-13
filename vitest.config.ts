@@ -1,7 +1,6 @@
 import { defineConfig } from 'vitest/config';
-import path from 'node:path';
 
 export default defineConfig({
-  resolve: { alias: { '@engine': path.resolve(__dirname, 'src/engine') } },
+  resolve: { alias: { '@engine': new URL('./src/engine', import.meta.url).pathname } },
   test: { environment: 'node', include: ['tests/unit/**/*.test.ts'] },
 });
