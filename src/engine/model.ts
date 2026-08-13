@@ -26,6 +26,8 @@ export function migrate(p: Project): Project {
     f.notes = f.notes || []; f.dims = f.dims || []; f.lines = f.lines || [];
     if (f.level == null) f.level = i;
     if (f.ref === undefined) f.ref = null;
+    /* the listing advertises a bitmap per floor; resolve it once, lazily sized */
+    if (!f.ref && f.refUrl) f.ref = { src: f.refUrl, x: 0, y: 0, w: 0, h: 0 };
     f.walls.forEach(w => { w.openings = w.openings || []; w.t = w.t || 10; });
   });
   return p;

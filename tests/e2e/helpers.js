@@ -1,11 +1,12 @@
 import { expect } from '@playwright/test';
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 
-const here = path.dirname(fileURLToPath(import.meta.url));
+/* __dirname, not import.meta: the root package is CJS, and Playwright
+   transpiles import syntax but leaves import.meta alone. */
+const here = __dirname;
 export const FIXTURES = path.join(here, '..', 'fixtures');
-export const APP = '/index.html';
+export const APP = process.env.E2E_TARGET === 'next' ? '/' : '/index.html';
 export const FUNDA_URL = 'https://www.funda.nl/detail/koop/rosmalen/huis-pieter-kleijnstraat-19/44432123/';
 
 /* ── a clean, deterministic app on every test ──────────────────── */

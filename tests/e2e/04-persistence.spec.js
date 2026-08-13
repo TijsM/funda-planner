@@ -67,7 +67,7 @@ test.describe('the library', () => {
     await expect(page.locator('#libList .empty')).toBeVisible();
 
     await page.locator('#ovLib [data-close]').click();      // the modal covers the top bar
-    await expect(page.locator('#ovLib')).not.toHaveClass(/open/);
+    await expect(page.locator('#ovLib')).toBeHidden();
     await page.locator('#btnSave').click();
     await page.locator('#btnLib').click();
     await expect(page.locator('#libList .lib-i')).toHaveCount(1);
@@ -98,7 +98,7 @@ test.describe('autosave', () => {
     expect(s.name).toBe('Niet opgeslagen');
     expect(s.floors).toHaveLength(5);
     expect(s.floors[2].items).toBeGreaterThan(0);
-    await expect(page.locator('#ovImport')).not.toHaveClass(/open/);
+    await expect(page.locator('#ovImport')).toBeHidden();
     await expect(toast(page, 'where you left off')).toBeVisible();
   });
 });

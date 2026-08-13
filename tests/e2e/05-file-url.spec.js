@@ -1,11 +1,13 @@
 import { test, expect } from '@playwright/test';
 import path from 'path';
-import { pathToFileURL, fileURLToPath } from 'url';
+import { pathToFileURL } from 'url';
 import { fresh, S, waitFloors, FUNDA_URL, inkRatio, addFromTray, toast, dismissModal, appFailures } from './helpers.js';
 
 /* The app is meant to be double-clicked. That makes the page origin `null`,
    which is the strictest CORS case there is — so it gets its own suite. */
-const here = path.dirname(fileURLToPath(import.meta.url));
+/* __dirname, not import.meta: the root package is CJS, and Playwright
+   transpiles import syntax but leaves import.meta alone. */
+const here = __dirname;
 const FILE_URL = pathToFileURL(path.join(here, '..', '..', 'index.html')).href;
 
 test.describe('opened straight from disk (file://)', () => {

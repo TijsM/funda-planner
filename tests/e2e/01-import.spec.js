@@ -80,14 +80,20 @@ test.describe('Funda import', () => {
     await fresh(page);
     await page.goto(appUrl());
     await page.locator('#inUrl').fill(FUNDA_URL);
+    const stepLog = [];
+    const poll = setInterval(async () => {
+      try { stepLog.push(...await page.locator('#steps .step').allInnerTexts()); } catch { /* gone */ }
+    }, 150);
     await page.locator('#btnGo').click();
     await waitFloors(page, 5);
-    const steps = await page.locator('#steps .step').allInnerTexts();
+    clearInterval(poll);
+    // the modal unmounts on success, so capture the log while it is still up
+    const steps = stepLog;
     expect(steps.join(' ')).toMatch(/Listing page read/);
     expect(steps.join(' ')).toMatch(/Found project 187897594/);
     expect(steps.join(' ')).toMatch(/Vector geometry downloaded/);
     expect(steps.join(' ')).toMatch(/183 walls|Ready/);
-    await expect(page.locator('#ovImport')).not.toHaveClass(/open/);
+    await expect(page.locator('#ovImport')).toBeHidden();   // closes on success
   });
 
   test('falls back to pasted page source when the proxy is unusable', async ({ page }) => {
