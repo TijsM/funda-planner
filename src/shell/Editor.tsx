@@ -215,7 +215,10 @@ function CatalogPanel() {
   const [q, setQ] = useState('');
   const match = (s: string) => !q || s.toLowerCase().includes(q.trim().toLowerCase());
   const groups = CATALOG
-    .map(g => ({ group: g.group, items: g.items.filter(i => match(i.name) || match(g.group)) }))
+    .map(g => ({
+      group: g.group,
+      items: g.items.filter(i => match(i.name) || match(g.group) || match(i.alt ?? '')),
+    }))
     .filter(g => g.items.length);
   const n = groups.reduce((s, g) => s + g.items.length, 0);
 

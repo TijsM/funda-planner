@@ -66,6 +66,36 @@ test.describe('the Add tray', () => {
     await expect(page.locator('#trayBody .empty')).toBeVisible();
   });
 
+  test('finds the L-shaped sofas by synonym, and places one at real size', async ({ page }) => {
+    /* the frozen POC in index.html has neither the L glyphs nor search aliases */
+    test.skip(process.env.E2E_TARGET !== 'next', 'v2 shell feature');
+    await starter(page);
+    await page.locator('#fAdd').click();
+
+    /* the words a person types — none of which is the tile's own name */
+    for (const [q, kind] of [['l-shape', 'sofaL'], ['hoekbank', 'sofaL'], ['chaise', 'sofaChaise'],
+      ['corner', 'sofaL'], ['sectional', 'sofaL']]) {
+      await page.locator('#traySearch').fill(q);
+      await page.waitForTimeout(150);
+      await expect(page.locator(`.tile[data-kind="${kind}"]`), q).toHaveCount(1);
+    }
+    /* the alias is a search key, never shown */
+    await page.locator('#traySearch').fill('hoekbank');
+    await page.waitForTimeout(150);
+    expect((await page.locator('#trayBody .tile b').allInnerTexts()).join(' ')).toBe('L-shaped sofa');
+
+    await page.locator('.tile[data-kind="sofaL"]').click();
+    await clickPlan(page, 400, 320);
+    await page.waitForTimeout(200);
+    const f = await floorOf(page);
+    expect(f.items).toBe(1);
+    const it = await page.evaluate(() => {
+      const i = window.__S.proj.floors[0].items[0];
+      return { kind: i.kind, w: i.w, h: i.h, label: i.label };
+    });
+    expect(it).toMatchObject({ kind: 'sofaL', w: 265, h: 200, label: 'L-shaped sofa' });
+  });
+
   test('closes itself once you arm an item, so the plan is visible', async ({ page }) => {
     await starter(page);
     await page.locator('#fAdd').click();

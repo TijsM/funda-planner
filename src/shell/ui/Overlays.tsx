@@ -24,7 +24,10 @@ export function AddTray() {
 
   const draw = Object.entries(SPECIALS).filter(([k, v]) => match(v.name) || match(k));
   const groups = CATALOG
-    .map(g => ({ group: g.group, items: g.items.filter(i => match(i.name) || match(g.group)) }))
+    .map(g => ({
+      group: g.group,
+      items: g.items.filter(i => match(i.name) || match(g.group) || match(i.alt ?? '')),
+    }))
     .filter(g => g.items.length);
   const empty = !draw.length && !groups.length;
 

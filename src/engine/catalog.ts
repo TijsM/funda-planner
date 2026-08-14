@@ -7,6 +7,9 @@ export type Glyph = (g: Ctx, w: number, h: number, u: number) => void;
 
 export interface CatalogEntry {
   kind: string; name: string; w: number; h: number; draw: Glyph; group: string;
+  /** extra words the tray search should match — synonyms, and the Dutch a
+   *  person working from a Funda listing is likely to type. Never displayed. */
+  alt?: string;
 }
 
 /* ── drawing primitives ─────────────────────────────────────────── */
@@ -32,6 +35,36 @@ export const G = {
     if (arm) { rr(g, -w / 2, -h / 2, w * .13, h, 4); g.fill(); rr(g, w / 2 - w * .13, -h / 2, w * .13, h, 4); g.fill(); }
     g.restore();
     if (back) { rr(g, -w / 2, -h / 2, w, h * .26, 4); g.stroke(); }
+  },
+  /* L-shaped seating. The long run is along the top edge and the return arm
+   *  goes down the left, leaving the opposite corner as open floor — that
+   *  notch is the whole point, and is what a filled rectangle cannot say.
+   *  `chaise` drops the back off the return arm, so it reads as a chaise
+   *  longue rather than a second seating run. Mirror handles the other hand. */
+  lseat(g: Ctx, w: number, h: number, depth?: number, chaise?: number) {
+    const d = Math.max(8, Math.min(depth || 92, Math.min(w, h) - 8));
+    const b = Math.min(28, d * .3);                    // backrest thickness
+    g.beginPath();
+    g.moveTo(-w / 2, -h / 2); g.lineTo(w / 2, -h / 2);
+    g.lineTo(w / 2, -h / 2 + d); g.lineTo(-w / 2 + d, -h / 2 + d);
+    g.lineTo(-w / 2 + d, h / 2); g.lineTo(-w / 2, h / 2);
+    g.closePath();
+    g.fill(); g.stroke();
+
+    g.save(); g.globalAlpha = .5;
+    rr(g, -w / 2, -h / 2, w, b, 4); g.fill();          // back along the long run
+    if (!chaise) { rr(g, -w / 2, -h / 2, b, h, 4); g.fill(); }
+    g.restore();
+
+    /* the seat, so the upholstery reads as depth rather than a flat slab */
+    const x0 = -w / 2 + (chaise ? 0 : b), y0 = -h / 2 + b;
+    ln(g, x0, y0, w / 2, y0);
+    if (!chaise) ln(g, x0, y0, x0, h / 2);
+    /* one division per arm, marking the corner seat */
+    g.save(); g.globalAlpha = .4;
+    ln(g, -w / 2 + d, y0, -w / 2 + d, -h / 2 + d);
+    ln(g, x0, -h / 2 + d, -w / 2 + d, -h / 2 + d);
+    g.restore();
   },
   bed(g: Ctx, w: number, h: number) {
     box(g, w, h, 3);
@@ -98,12 +131,13 @@ export const G = {
   },
 };
 
-const RAW: [string, [string, string, number, number, Glyph][]][] = [
+const RAW: [string, [string, string, number, number, Glyph, string?][]][] = [
   ['Living', [
-    ['sofa2',   'Sofa 2-seat', 165,  90, (g, w, h) => G.seat(g, w, h, 1, 1)],
-    ['sofa3',   'Sofa 3-seat', 225,  95, (g, w, h) => G.seat(g, w, h, 1, 1)],
-    ['sofaL',   'Corner sofa', 265, 200, (g, w, h) => { box(g, w, h, 6); g.save(); g.globalAlpha = .5; rr(g, -w / 2, -h / 2, w, 32, 4); g.fill(); rr(g, -w / 2, -h / 2, 32, h, 4); g.fill(); g.restore(); rr(g, -w / 2 + 32, -h / 2 + 32, w - 32, h - 32, 4); g.stroke(); }],
-    ['armchair','Armchair',     88,  88, (g, w, h) => G.seat(g, w, h, 1, 1)],
+    ['sofa2',   'Sofa 2-seat', 165,  90, (g, w, h) => G.seat(g, w, h, 1, 1), 'couch settee bank tweezitsbank'],
+    ['sofa3',   'Sofa 3-seat', 225,  95, (g, w, h) => G.seat(g, w, h, 1, 1), 'couch settee bank driezitsbank'],
+    ['sofaL',   'L-shaped sofa', 265, 200, (g, w, h) => G.lseat(g, w, h), 'corner sectional l-shape lounge hoekbank'],
+    ['sofaChaise', 'Sofa with chaise', 260, 160, (g, w, h) => G.lseat(g, w, h, 88, 1), 'l-shape chaise longue divan daybed lounge'],
+    ['armchair','Armchair',     88,  88, (g, w, h) => G.seat(g, w, h, 1, 1), 'fauteuil easy chair'],
     ['pouf',    'Pouf',         55,  55, (g, w) => G.round(g, w)],
     ['coffee',  'Coffee table',110,  60, G.table],
     ['sidetbl', 'Side table',   50,  50, (g, w) => G.round(g, w)],
@@ -246,7 +280,7 @@ export const ROOM_SWATCHES = ['#E4DCC5', '#C6B9AA', '#D6C7B4', '#C9D3C0', '#BFCB
 
 export const CATALOG: { group: string; items: CatalogEntry[] }[] = RAW.map(([group, list]) => ({
   group,
-  items: list.map(([kind, name, w, h, draw]) => ({ kind, name, w, h, draw, group })),
+  items: list.map(([kind, name, w, h, draw, alt]) => ({ kind, name, w, h, draw, group, alt })),
 }));
 
 export const CAT_BY_KIND: Record<string, CatalogEntry> = Object.fromEntries(

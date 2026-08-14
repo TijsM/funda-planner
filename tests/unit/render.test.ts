@@ -1,10 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CATALOG, blankProject, fmlToProject, handlesFor, parseFundaSource, resolveSel } from '@engine/index';
+import {
+  CATALOG, CAT_BY_KIND, blankProject, fmlToProject, handlesFor, parseFundaSource, pointInPoly,
+  resolveSel,
+} from '@engine/index';
 import { paint } from '@engine/render';
 import type { Fml } from '@engine/io/funda';
-import type { Draft, Layers, View } from '@engine/types';
+import type { Draft, Layers, Pt, View } from '@engine/types';
 
 /** A canvas that records nothing but refuses non-finite arguments. NaN in a
  *  path silently draws nothing in a real browser, which is exactly the class
@@ -108,6 +111,62 @@ describe('catalogue glyphs', () => {
         expect(() => e.draw(ctx as never, w, h, 0.5), `${e.kind} @ ${w}×${h}`).not.toThrow();
       }
     }
+  });
+});
+
+describe('L-shaped seating', () => {
+  /* Capture the first closed path a glyph builds — for these it is the outline
+     itself, so the shape can be asserted rather than eyeballed. */
+  function outlineOf(kind: string) {
+    const pts: Pt[] = [];
+    let open = true;
+    const o: Record<string, unknown> = {};
+    for (const m of [
+      'beginPath', 'stroke', 'fill', 'arc', 'save', 'restore', 'setLineDash', 'quadraticCurveTo',
+      'translate', 'scale', 'rotate', 'fillText', 'rect',
+    ]) o[m] = () => {};
+    o.moveTo = (x: number, y: number) => { if (open) pts.push({ x, y }); };
+    o.lineTo = (x: number, y: number) => { if (open) pts.push({ x, y }); };
+    o.closePath = () => { open = false; };
+    o.measureText = () => ({ width: 40 });
+    const e = CAT_BY_KIND[kind];
+    e.draw(o as never, e.w, e.h, 0.5);
+    return { pts, e };
+  }
+
+  for (const kind of ['sofaL', 'sofaChaise']) {
+    it(`${kind} leaves the far corner as open floor`, () => {
+      const { pts, e } = outlineOf(kind);
+      expect(pts).toHaveLength(6);                       // an L, not a rectangle
+      /* the notch: deep inside the corner opposite the two arms */
+      expect(pointInPoly({ x: e.w / 2 - 20, y: e.h / 2 - 20 }, pts)).toBe(false);
+      /* and the two arms are solid */
+      expect(pointInPoly({ x: -e.w / 2 + 20, y: -e.h / 2 + 20 }, pts)).toBe(true);
+      expect(pointInPoly({ x: e.w / 2 - 20, y: -e.h / 2 + 20 }, pts)).toBe(true);
+      expect(pointInPoly({ x: -e.w / 2 + 20, y: e.h / 2 - 20 }, pts)).toBe(true);
+    });
+  }
+
+  it('a straight sofa fills its whole footprint, which is the contrast', () => {
+    const { pts, e } = outlineOf('sofa3');
+    expect(pointInPoly({ x: e.w / 2 - 20, y: e.h / 2 - 20 }, pts)).toBe(true);
+  });
+
+  it('is findable by the words a person would actually type', () => {
+    /* the same match the tray and the Pro catalogue run */
+    const hit = (q: string) => CATALOG.flatMap(g => g.items)
+      .filter(i => [i.name, i.group, i.alt ?? ''].some(s => s.toLowerCase().includes(q)))
+      .map(i => i.kind);
+
+    expect(hit('l-shape')).toEqual(expect.arrayContaining(['sofaL', 'sofaChaise']));
+    expect(hit('hoekbank')).toContain('sofaL');
+    expect(hit('corner')).toContain('sofaL');
+    expect(hit('sectional')).toContain('sofaL');
+    expect(hit('chaise')).toEqual(['sofaChaise']);
+    expect(hit('fauteuil')).toContain('armchair');
+    /* an alias is a search key only — it must never reach the tile */
+    expect(CAT_BY_KIND.sofaL.name).toBe('L-shaped sofa');
+    expect(CATALOG.flatMap(g => g.items).every(i => !i.name.includes('hoekbank'))).toBe(true);
   });
 });
 
