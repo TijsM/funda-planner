@@ -83,6 +83,11 @@ export function Editor() {
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
+      /* This guard is the ONLY thing keeping tool shortcuts from firing while
+         someone types. Next hydrates at the document level, so React's
+         delegated listeners live on this same node — an input's
+         stopPropagation() cannot stop us. A field that wants a key to act
+         globally has to do it itself. Do not relax this. */
       if (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
       const s = ed();
       const mod = e.metaKey || e.ctrlKey;

@@ -18,6 +18,8 @@ export function TestBridge() {
       get sel() { return ed().sel; },
       set sel(v: { t: string; id: string }[]) { ed().setSel(v as never); },
       get place() { return ed().place; },
+      get tool() { return ed().tool; },
+      get trayOpen() { return ed().trayOpen; },
       get draft() { return ed().draft; },
       get simple() { return ed().simple; },
       get dirty() { return ed().dirty; },

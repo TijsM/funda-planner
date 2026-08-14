@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ed, useEditor, useEditorShallow, useSelection } from '@state/store';
 import { CATALOG, CAT_BY_KIND, ROOM_SWATCHES, SWATCHES, toneFor } from '@engine/catalog';
 import { dist, fmtM2, polyArea } from '@engine/geometry';
-import { descOf, labelOf, setDesc, setLabel } from '@engine/model';
+import { labelOf, setDesc, setLabel } from '@engine/model';
 import { selScreenBBox, snapPoint, toWorld } from '@engine/view';
 import type { Area, Item, Note, Opening, SelObj, Wall } from '@engine/types';
 import {
@@ -20,7 +20,21 @@ export function AddTray() {
   const open = useEditor(s => s.trayOpen);
   const place = useEditor(s => s.place);
   const [q, setQ] = useState('');
+  const search = useRef<HTMLInputElement>(null);
   const match = (s: string) => !q || s.toLowerCase().includes(q.trim().toLowerCase());
+
+  /* Opening the tray means "I am looking for something" — so put the caret in
+     the search box, with any previous query selected so typing replaces it.
+     A tick late: the tray is visibility:hidden until the class lands. */
+  useEffect(() => {
+    if (!open) {
+      /* hand focus back, or every shortcut would type into a hidden field */
+      if (document.activeElement === search.current) search.current?.blur();
+      return;
+    }
+    const t = setTimeout(() => { search.current?.focus(); search.current?.select(); }, 30);
+    return () => clearTimeout(t);
+  }, [open]);
 
   const draw = Object.entries(SPECIALS).filter(([k, v]) => match(v.name) || match(k));
   const groups = CATALOG
@@ -73,9 +87,19 @@ export function AddTray() {
         <div className="tray-search">
           <Icon id="i-search" />
           <input
-            id="traySearch" placeholder="sofa, bed, tree, wall…" spellCheck={false}
+            ref={search} id="traySearch" placeholder="sofa, bed, tree, wall…" spellCheck={false}
             value={q} onChange={e => setQ(e.target.value)}
-            onKeyDown={e => { e.stopPropagation(); if (e.key === 'Escape') setQ(''); }}
+            /* This box holds focus the whole time the tray is open, and the
+               document key handler ignores anything typed in a field — so
+               escape has to run the cancel cascade here, or nothing would. */
+            onKeyDown={e => {
+              e.stopPropagation();
+              if (e.key !== 'Escape') return;
+              const s = ed();
+              if (q) setQ('');
+              else if (s.place || s.draft) s.patch({ place: null, draft: null });
+              else s.patch({ trayOpen: false });
+            }}
           />
         </div>
         <div className="spring" />
@@ -168,13 +192,10 @@ export function ObjectToolbar() {
 
   const show = simple && sel.length > 0 && !dragging && !place;
 
-  /* Anything describable gets the row; it starts open when there is already a
-     description to read, and `null` means "follow the object" until asked. */
+  /* Anything describable shows the row outright. It was behind a button to keep
+     the bar narrow, but a field you have to go and find does not get used. */
   const one = sel.length === 1 ? sel[0] : null;
   const target = one && (one.t === 'item' || one.t === 'area') ? one.o : null;
-  const [descOpen, setDescOpen] = useState<boolean | null>(null);
-  useEffect(() => { setDescOpen(null); }, [target?.id]);
-  const showDesc = !!target && (descOpen ?? !!descOf(target));
 
   useEffect(() => {
     if (!show) { setPos(null); return; }
@@ -191,7 +212,7 @@ export function ObjectToolbar() {
       y: Math.max(8, Math.min(y, stage.clientHeight - h - 8)),
       below,
     });
-  }, [show, sel, view, showDesc]);
+  }, [show, sel, view, target]);
 
   /* A freshly dropped room or note should be ready to type into. autoFocus
      alone loses the race against the canvas taking pointer capture. */
@@ -215,26 +236,21 @@ export function ObjectToolbar() {
       className={`ctx show${pos?.below ? ' below' : ''}`} id="ctx" ref={ref}
       style={pos ? { left: pos.x, top: pos.y } : { visibility: 'hidden' }}
     >
-      <div className="ctx-row">
-        <ToolbarBody
-          sel={sel}
-          desc={target ? { on: showDesc, toggle: () => setDescOpen(!showDesc) } : null}
-        />
-      </div>
-      {target && showDesc && <DescRow o={target} />}
+      <div className="ctx-row"><ToolbarBody sel={sel} /></div>
+      {target && <DescRow o={target} />}
     </div>
   );
 }
 
-/** One line of free text on the selected object, headed for the render prompt. */
+/** One line of free text on the selected object, headed for the render prompt.
+ *  No autoFocus: the name field owns focus on a freshly placed object. */
 function DescRow({ o }: { o: Item | Area }) {
   return (
     <div className="ctx-desc">
       <Icon id="i-spark" />
       <input
         id="ctxDesc" placeholder="describe it for the render — colour, material, style…"
-        defaultValue={o.desc ?? ''} key={o.id}
-        autoFocus={!o.desc}
+        value={o.desc ?? ''}
         onPointerDown={e => e.stopPropagation()}
         onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter' || e.key === 'Escape') e.currentTarget.blur(); }}
         onChange={e => { const s = ed(); s.pushUndo(); setDesc(o, e.target.value); s.touch(); }}
@@ -242,9 +258,6 @@ function DescRow({ o }: { o: Item | Area }) {
     </div>
   );
 }
-
-const DescBtn = ({ on, toggle }: { on: boolean; toggle: () => void }) =>
-  CB('ctxDescBtn', 'i-spark', 'Description for the render', toggle, on ? 'pri' : '');
 
 const CB = (id: string, icon: string, title: string, onClick: () => void, cls = '', label?: string) => (
   <button key={id} className={`cb ${cls}`} id={id} title={title} onClick={e => { e.stopPropagation(); onClick(); }}>
@@ -266,9 +279,7 @@ function Swatches({ list, cur, onPick }: { list: string[]; cur?: string; onPick:
   );
 }
 
-interface DescToggle { on: boolean; toggle: () => void }
-
-function ToolbarBody({ sel, desc }: { sel: SelObj[]; desc: DescToggle | null }) {
+function ToolbarBody({ sel }: { sel: SelObj[] }) {
   if (sel.length > 1) {
     return (
       <>
@@ -283,10 +294,10 @@ function ToolbarBody({ sel, desc }: { sel: SelObj[]; desc: DescToggle | null }) 
   const s0 = sel[0];
   if (!s0) return null;
 
-  if (s0.t === 'item') return <ItemBar o={s0.o} desc={desc} />;
+  if (s0.t === 'item') return <ItemBar o={s0.o} />;
   if (s0.t === 'wall') return <WallBar o={s0.o} />;
   if (s0.t === 'opening') return <OpeningBar o={s0.o} wall={s0.wall} />;
-  if (s0.t === 'area') return <AreaBar o={s0.o} desc={desc} />;
+  if (s0.t === 'area') return <AreaBar o={s0.o} />;
   if (s0.t === 'note') return <NoteBar o={s0.o} />;
   if (s0.t === 'line' && s0.o.arrow) {
     return (
@@ -311,18 +322,19 @@ function ToolbarBody({ sel, desc }: { sel: SelObj[]; desc: DescToggle | null }) 
   );
 }
 
-function ItemBar({ o, desc }: { o: Item; desc: DescToggle | null }) {
+function ItemBar({ o }: { o: Item }) {
   const c = CAT_BY_KIND[o.kind];
   return (
     <>
+      {/* Controlled, deliberately. It used to carry the value in its React key,
+          which rebuilt the element on every keystroke and threw focus away.
+          The toolbar re-renders on `rev`, so this stays in step with undo. */}
       <input
-        className="nm" id="ctxLabel" placeholder={c?.name ?? 'label'} defaultValue={labelOf(o)}
-        key={`${o.id}:${labelOf(o)}`}
+        className="nm" id="ctxLabel" placeholder={c?.name ?? 'label'} value={labelOf(o)}
         onPointerDown={e => e.stopPropagation()}
         onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter' || e.key === 'Escape') e.currentTarget.blur(); }}
         onChange={e => { const s = ed(); s.pushUndo(); setLabel(o, e.target.value); s.touch(); }}
       />
-      {desc && <DescBtn {...desc} />}
       <span className="div" />
       {CB('ctxRot', 'i-rot', 'Rotate 90°', () => { const s = ed(); s.pushUndo(); o.rot = ((o.rot || 0) + 90) % 360; s.touch(); })}
       {CB('ctxFlip', 'i-flip', 'Mirror', () => { const s = ed(); s.pushUndo(); o.flip = o.flip ? 0 : 1; s.touch(); })}
@@ -368,18 +380,16 @@ function OpeningBar({ o, wall }: { o: Opening; wall: Wall }) {
   );
 }
 
-function AreaBar({ o, desc }: { o: Area; desc: DescToggle | null }) {
+function AreaBar({ o }: { o: Area }) {
   return (
     <>
       <input
-        className="nm" id="ctxName" placeholder="room name" defaultValue={o.name}
-        key={o.id}
+        className="nm" id="ctxName" placeholder="room name" value={o.name}
         autoFocus={!o.name}
         onPointerDown={e => e.stopPropagation()}
         onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter' || e.key === 'Escape') e.currentTarget.blur(); }}
         onChange={e => { const s = ed(); s.pushUndo(); o.name = e.target.value; s.touch(); }}
       />
-      {desc && <DescBtn {...desc} />}
       <span className="val">{fmtM2(polyArea(o.poly))} m²</span>
       <span className="div" />
       <Swatches list={ROOM_SWATCHES.slice(0, 6)} cur={o.color} onPick={c => { const s = ed(); s.pushUndo(); o.color = c; s.touch(); }} />
@@ -394,8 +404,8 @@ function NoteBar({ o }: { o: Note }) {
   return (
     <>
       <input
-        className="nm" id="ctxNote" style={{ width: 170 }} defaultValue={String(o.text).replace(/\n/g, ' ')}
-        key={o.id} autoFocus
+        className="nm" id="ctxNote" style={{ width: 170 }} value={String(o.text).replace(/\n/g, ' ')}
+        autoFocus
         onPointerDown={e => e.stopPropagation()}
         onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter' || e.key === 'Escape') e.currentTarget.blur(); }}
         onChange={e => { const s = ed(); s.pushUndo(); o.text = e.target.value; s.touch(); }}

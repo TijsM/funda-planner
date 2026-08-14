@@ -42,11 +42,8 @@ test.describe('a description on every object', () => {
     await starter(page);
     await addFromTray(page, 'sofa3', 380, 300);
 
-    /* the row is collapsed until asked for — the bar stays narrow */
-    await expect(page.locator('#ctxDesc')).toHaveCount(0);
-    await page.locator('#ctxDescBtn').click();
+    /* present the moment the object is selected — never a click away */
     await expect(page.locator('#ctxDesc')).toBeVisible();
-
     await page.locator('#ctxDesc').fill('dark green velvet, mid-century');
     await page.waitForTimeout(150);
     expect((await descs(page)).items[0].d).toBe('dark green velvet, mid-century');
@@ -56,10 +53,9 @@ test.describe('a description on every object', () => {
     expect((await descs(page)).items[0].has).toBe(false);
   });
 
-  test('reopens already written, without being asked for', async ({ page }) => {
+  test('is there again, already written, when you reselect the object', async ({ page }) => {
     await starter(page);
     await addFromTray(page, 'sofa3', 380, 300);
-    await page.locator('#ctxDescBtn').click();
     await page.locator('#ctxDesc').fill('oxblood leather');
     await page.waitForTimeout(150);
 
@@ -81,7 +77,6 @@ test.describe('a description on every object', () => {
     await starter(page);
     await addFromTray(page, 'draw:room', 300, 260);
     await page.locator('#ctxName').fill('Werkkamer');
-    await page.locator('#ctxDescBtn').click();
     await page.locator('#ctxDesc').fill('wide oak floorboards, north light');
     await page.waitForTimeout(150);
 
@@ -92,7 +87,6 @@ test.describe('a description on every object', () => {
   test('the Pro inspector edits the same field', async ({ page }) => {
     await starter(page);
     await addFromTray(page, 'sofa3', 380, 300);
-    await page.locator('#ctxDescBtn').click();
     await page.locator('#ctxDesc').fill('from the toolbar');
     await page.waitForTimeout(150);
 
@@ -147,7 +141,6 @@ test.describe('a description on every object', () => {
   test('survives save, wipe and reload', async ({ page }) => {
     await starter(page);
     await addFromTray(page, 'sofa3', 380, 300);
-    await page.locator('#ctxDescBtn').click();
     await page.locator('#ctxDesc').fill('oxblood leather, brass castors');
     await page.waitForTimeout(150);
 
