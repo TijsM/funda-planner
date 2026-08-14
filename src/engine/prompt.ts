@@ -1,7 +1,7 @@
 import type { Area, Floor, Item, Pt, Project } from './types';
 import { clamp, compass, polyArea, polyCentroid, pointInPoly, unitNormal } from './geometry';
 import { CAT_BY_KIND } from './catalog';
-import { labelOf, shellBBox } from './model';
+import { descOf, labelOf, shellBBox } from './model';
 
 export type ViewKind = 'top' | 'eye' | 'iso' | 'sketch';
 
@@ -45,10 +45,14 @@ export function planFacts(f: Floor): PlanFacts {
       };
     });
 
+  /* Fitted objects imported from the listing are normally noise — dozens of
+     unnamed boxes. One the user has described is the opposite: deliberate. */
+  const speaks = (i: Item) => !i.fromFunda || !!descOf(i);
+
   const used = new Set<string>();
   rooms.forEach(r => {
     r.items = f.items.filter(i => {
-      if (used.has(i.id) || i.fromFunda) return false;
+      if (used.has(i.id) || !speaks(i)) return false;
       if (!pointInPoly({ x: i.x, y: i.y }, r.a.poly)) return false;
       used.add(i.id);
       return true;
@@ -71,7 +75,7 @@ export function planFacts(f: Floor): PlanFacts {
 
   return {
     rooms,
-    loose: f.items.filter(i => !used.has(i.id) && !i.fromFunda),
+    loose: f.items.filter(i => !used.has(i.id) && speaks(i)),
     doors: doors.length,
     windowSides: tally(windows),
     w: (b.x1 - b.x0) / 100,
@@ -102,6 +106,26 @@ export const AI_VIEWS: Record<ViewKind, { lead: string; cam: string }> = {
   },
 };
 
+/** Close the user's free text off, so it cannot run into the generated prose
+ *  that follows it on the same line. */
+function sentence(s: string): string {
+  return /[.!?;:]$/.test(s) ? s : `${s}.`;
+}
+
+/** `sofa (225×95 cm) — dark green velvet, low back`
+ *
+ *  Descriptions are free text and routinely contain commas, so a comma-joined
+ *  list stops being parseable the moment one is written. Switch to semicolons
+ *  only then — a plan with no descriptions reads exactly as it did before. */
+function itemList(items: Item[], dim: boolean): string {
+  const parts = items.map(i => {
+    const nm = labelOf(i).toLowerCase() || 'object';
+    const d = descOf(i);
+    return (dim ? `${nm} (${Math.round(i.w)}×${Math.round(i.h)} cm)` : nm) + (d ? ` — ${d}` : '');
+  });
+  return parts.join(items.some(i => descOf(i)) ? '; ' : ', ');
+}
+
 export function buildPrompt(project: Project, f: Floor, opts: PromptOpts): string {
   const F = planFacts(f);
   const V = AI_VIEWS[opts.view] ?? AI_VIEWS.top;
@@ -124,13 +148,13 @@ export function buildPrompt(project: Project, f: Floor, opts: PromptOpts): strin
     const bits = [r.name];
     if (dim) bits.push(`${(r.area / 10000).toFixed(1)} m²`);
     if (!only) bits.push(r.where);
-    let line = `- ${bits.join(', ')}.`;
+    const rd = descOf(r.a);
+    /* an em-dash clause, the same convention the object list uses — and it
+       avoids capitalising whatever word the user happened to start with */
+    let line = rd ? `- ${bits.join(', ')} — ${sentence(rd)}` : `- ${bits.join(', ')}.`;
     if (opts.furniture) {
       if (r.items.length) {
-        line += ' Contains: ' + r.items.map(i => {
-          const nm = labelOf(i).toLowerCase() || 'object';
-          return dim ? `${nm} (${Math.round(i.w)}×${Math.round(i.h)} cm)` : nm;
-        }).join(', ') + '.';
+        line += ' Contains: ' + itemList(r.items, dim) + '.';
       } else if (r.fitted) {
         line += ' Fitted units already in place (as drawn); no loose furniture.';
       } else {
@@ -140,8 +164,15 @@ export function buildPrompt(project: Project, f: Floor, opts: PromptOpts): strin
     L.push(line);
   });
   if (!only && opts.furniture && F.loose.length) {
-    L.push('- Elsewhere on the floor: '
-      + F.loose.map(i => labelOf(i).toLowerCase() || 'object').join(', ') + '.');
+    L.push('- Elsewhere on the floor: ' + itemList(F.loose, false) + '.');
+  }
+  /* The descriptions are the one part of this brief a person actually wrote —
+     say so, or the model treats them as flavour text alongside the geometry. */
+  const listed = rooms.flatMap(r => r.items).concat(only ? [] : F.loose);
+  if (rooms.some(r => descOf(r.a)) || (opts.furniture && listed.some(i => descOf(i)))) {
+    L.push('');
+    L.push('These are deliberate instructions from the person who drew the plan, '
+      + 'not suggestions: reproduce every described room and object as described.');
   }
   L.push('');
 

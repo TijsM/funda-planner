@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { ed, useEditor, useEditorShallow, useSelection } from '@state/store';
 import { CAT_BY_KIND, ROOM_SWATCHES, SWATCHES } from '@engine/catalog';
 import { dist, fmtM2, polyArea, R2, unitNormal, uid } from '@engine/geometry';
-import { contentBBox, labelOf, setLabel } from '@engine/model';
+import { contentBBox, labelOf, setDesc, setLabel } from '@engine/model';
 import type { Area, Dim, Item, Line, Note, Opening, Wall } from '@engine/types';
 import { deleteSelection, duplicateSelection, rotateSelection } from '../commands';
 import { Icon } from './Icons';
@@ -53,6 +53,28 @@ function Text({ id, value, onChange, placeholder }: { id: string; value: string;
 const Row = ({ label, children }: { label: string; children: React.ReactNode }) => (
   <div className="row"><span className="lbl">{label}</span><div className="fields">{children}</div></div>
 );
+
+/** Free text that feeds the image-generator prompt. Empty by default, and
+ *  emptying it removes the field again rather than storing "". */
+function Desc({ id, o }: { id: string; o: Item | Area }) {
+  const write = (v: string) => { const s = ed(); s.pushUndo(); setDesc(o, v); s.touch(); };
+  /* stacked, not in the 58px label column — "Description" does not fit there,
+     and free text deserves the full panel width */
+  return (
+    <div style={{ marginBottom: 11 }}>
+      <span className="lbl" style={{ display: 'block', marginBottom: 5 }}>Description</span>
+      <textarea
+        className="src" id={id}
+        style={{ width: '100%', height: 62, fontFamily: 'var(--sans)', fontSize: 12 }}
+        placeholder="dark green velvet, mid-century, low back…"
+        value={o.desc ?? ''}
+        onChange={e => write(e.target.value)}
+        onKeyDown={e => e.stopPropagation()}
+      />
+      <div className="hint" style={{ marginTop: 4 }}>Goes into the render prompt.</div>
+    </div>
+  );
+}
 
 function Swatches({ list, cur, onPick }: { list: string[]; cur?: string; onPick: (c: string) => void }) {
   return (
@@ -137,6 +159,7 @@ function ItemInspector({ o, write }: { o: Item; write: Write }) {
           delete and replace with a catalogue item.
         </div>
       )}
+      <Desc id="inDesc" o={o} />
       <Row label="Position">
         <Num id="inX" pre="X" unit="cm" value={o.x} onChange={v => write(() => { o.x = v; })} />
         <Num id="inY" pre="Y" unit="cm" value={o.y} onChange={v => write(() => { o.y = v; })} />
@@ -241,6 +264,7 @@ function AreaInspector({ o, write }: { o: Area; write: Write }) {
   return (
     <>
       <Row label="Room"><Text id="inAreaName" value={o.name} placeholder="unnamed" onChange={v => write(() => { o.name = v; })} /></Row>
+      <Desc id="inAreaDesc" o={o} />
       <div className="row">
         <span className="lbl">Area</span>
         <span className="mono" style={{ fontSize: 13, color: 'var(--cyan)' }}>{fmtM2(polyArea(o.poly))} m²</span>

@@ -25,6 +25,9 @@ export interface Area {
   poly: Pt[];
   name: string;
   color: string;
+  /** free text the user wrote about this room; feeds the image-generator prompt.
+   *  Absent by default — never invented from the catalogue or the listing. */
+  desc?: string;
   /** label offset from the centroid */
   nx: number; ny: number;
   label: boolean;
@@ -38,6 +41,9 @@ export interface Item {
   rot: number;
   color?: string;
   label?: string;
+  /** free text the user wrote about this object; feeds the image-generator
+   *  prompt. Absent by default — never seeded from the catalogue. */
+  desc?: string;
   /** the label was deliberately cleared — do not fall back to the catalogue name */
   noLabel?: 1;
   flip?: 0 | 1;

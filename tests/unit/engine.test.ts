@@ -4,7 +4,8 @@ import path from 'node:path';
 import {
   CATALOG, CAT_BY_KIND, blankProject, buildPrompt, contentBBox, fmlToProject, migrate,
   newProject, parseFundaSource, parseProject, planFacts, pointInPoly, polyArea, polyCentroid,
-  rotPt, serializeProject, setLabel, labelOf, shellBBox, snapAngle, snapPoint, axisLock,
+  rotPt, serializeProject, setLabel, setDesc, descOf, labelOf, makeItem, newArea,
+  shellBBox, snapAngle, snapPoint, axisLock,
   fitTo, zoomAt, toScreen, toWorld, handlesFor, hitTest, resolveSel,
 } from '@engine/index';
 import type { Fml } from '@engine/io/funda';
@@ -244,5 +245,119 @@ describe('image-generator prompt', () => {
 
   it('folds in a free-text style', () => {
     expect(buildPrompt(p, floor, { ...base, style: 'warm oak' })).toContain('warm oak');
+  });
+});
+
+describe('object descriptions', () => {
+  /* a fresh project per test — descriptions are written into the document */
+  const plan = () => {
+    const q = parseProject(serializeProject(
+      fmlToProject(fml, { ...parseFundaSource(listing), url: 'https://www.funda.nl/x' }),
+    ))!;
+    return { q, f: q.floors[1] };
+  };
+  const base = { view: 'top' as const, furniture: true, dimensions: true };
+
+  it('is absent on everything by default', () => {
+    const { f } = plan();
+    expect(f.items.some(i => 'desc' in i)).toBe(false);
+    expect(f.areas.some(a => 'desc' in a)).toBe(false);
+    expect(descOf(makeItem('sofa3', { x: 0, y: 0 }))).toBe('');
+    expect(descOf(newArea({ x: 0, y: 0 }, 100, 0))).toBe('');
+  });
+
+  it('removes the field again when emptied, rather than storing ""', () => {
+    const i = makeItem('sofa3', { x: 0, y: 0 });
+    setDesc(i, 'dark green velvet');
+    expect(i.desc).toBe('dark green velvet');
+    setDesc(i, '   ');
+    expect('desc' in i).toBe(false);
+  });
+
+  it('puts a room description into that room\'s line', () => {
+    const { q, f } = plan();
+    const woon = f.areas.find(a => a.name === 'Woonkamer')!;
+    setDesc(woon, 'wide oak floorboards, low winter light');
+    const out = buildPrompt(q, f, base);
+    const line = out.split('\n').find(l => l.startsWith('- Woonkamer'))!;
+    expect(line).toContain('wide oak floorboards, low winter light');
+    /* ends as its own sentence, so it cannot run into the generated prose */
+    expect(line).toMatch(/low winter light\.( |$)/);
+  });
+
+  /* every item on this floor is a fitted one imported from the listing, so a
+     furniture list only exists once something is actually placed */
+  const furnish = (f: ReturnType<typeof plan>['f']) => {
+    const woon = f.areas.find(a => a.name === 'Woonkamer')!;
+    const c = polyCentroid(woon.poly);
+    const sofa = makeItem('sofa3', c);
+    const rug = makeItem('rug', { x: c.x + 1, y: c.y + 1 });
+    f.items.push(sofa, rug);
+    return { woon, sofa, rug };
+  };
+
+  it('puts an object description next to that object, and says to follow it', () => {
+    const { q, f } = plan();
+    const { sofa } = furnish(f);
+    setDesc(sofa, 'dark green velvet, mid-century, low back');
+
+    const out = buildPrompt(q, f, base);
+    const line = out.split('\n').find(l => l.startsWith('- Woonkamer'))!;
+    expect(line).toMatch(/sofa 3-seat \(\d+×\d+ cm\) — dark green velvet, mid-century, low back/);
+    /* a described list carries commas, so its entries separate on semicolons */
+    expect(line).toContain('; ');
+    expect(out).toMatch(/deliberate instructions/i);
+  });
+
+  it('leaves the brief untouched when nothing is described', () => {
+    const { q, f } = plan();
+    furnish(f);
+    const out = buildPrompt(q, f, base);
+    expect(out).not.toMatch(/deliberate instructions/i);
+    const list = out.split('\n').find(l => l.startsWith('- Woonkamer'))!.split('Contains: ')[1];
+    expect(list).toMatch(/, /);        // still comma-joined
+    expect(list).not.toContain(';');
+  });
+
+  it('collapses newlines a user pasted in', () => {
+    const { q, f } = plan();
+    const woon = f.areas.find(a => a.name === 'Woonkamer')!;
+    setDesc(woon, 'oak floors\n\nbrass  fittings\n');
+    const out = buildPrompt(q, f, base);
+    expect(out).toContain('oak floors brass fittings');
+    expect(out.split('\n').filter(l => l.startsWith('- Woonkamer'))).toHaveLength(1);
+  });
+
+  it('surfaces a described fitted object, which is otherwise skipped', () => {
+    const { q, f } = plan();
+    const woon = f.areas.find(a => a.name === 'Woonkamer')!;
+    const c = polyCentroid(woon.poly);
+    const fitted = { ...makeItem('sofa3', c), fromFunda: 1 as const, label: 'Kitchen run' };
+    f.items.push(fitted);
+
+    expect(buildPrompt(q, f, base)).not.toContain('kitchen run');
+    setDesc(fitted, 'matte black cabinetry, brass handles');
+    const out = buildPrompt(q, f, base);
+    expect(out).toContain('matte black cabinetry, brass handles');
+  });
+
+  it('drops object descriptions with the furniture, but keeps room ones', () => {
+    const { q, f } = plan();
+    const woon = f.areas.find(a => a.name === 'Woonkamer')!;
+    setDesc(woon, 'plastered walls');
+    const sofa = makeItem('sofa3', polyCentroid(woon.poly));
+    setDesc(sofa, 'dark green velvet');
+    f.items.push(sofa);
+
+    const out = buildPrompt(q, f, { ...base, furniture: false });
+    expect(out).toContain('plastered walls');
+    expect(out).not.toContain('dark green velvet');
+  });
+
+  it('survives a save and reload', () => {
+    const { q, f } = plan();
+    setDesc(f.areas[0], 'sunken seating');
+    const back = parseProject(serializeProject(q))!;
+    expect(back.floors[1].areas[0].desc).toBe('sunken seating');
   });
 });

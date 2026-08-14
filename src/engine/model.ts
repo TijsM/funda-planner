@@ -46,6 +46,17 @@ export function labelOf(i: Item): string {
   return i.label || (!i.noLabel && c ? c.name : '');
 }
 
+/** The description as the prompt should see it: newlines and runs of space
+ *  collapsed, because it is spliced into a line-oriented brief. */
+export const descOf = (o: { desc?: string }): string =>
+  String(o.desc ?? '').replace(/\s+/g, ' ').trim();
+
+/** Empty means absent. There is no "deliberately cleared" state to remember —
+ *  unlike a label, a description has no default to fall back to. */
+export function setDesc(o: Item | Area, v: string): void {
+  if (String(v).trim()) o.desc = v; else delete o.desc;
+}
+
 export function makeItem(kind: string, at: Pt): Item {
   const c = CAT_BY_KIND[kind];
   if (!c) throw new Error(`unknown catalogue kind: ${kind}`);

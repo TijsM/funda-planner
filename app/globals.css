@@ -502,12 +502,13 @@ textarea.src:focus{border-color:var(--vermilion)}
 
 /* ---------- floating context toolbar on the selection ---------- */
 .ctx{
-  position:absolute;z-index:60;display:none;align-items:center;gap:3px;padding:4px;
+  position:absolute;z-index:60;display:none;flex-direction:column;gap:3px;padding:4px;
   background:#211E19F2;border:1px solid var(--line-hi);border-radius:9px;
   box-shadow:0 10px 30px #000000ad;backdrop-filter:blur(10px);
   animation:ctxin .16s var(--ease) both;white-space:nowrap;
 }
 .ctx.show{display:flex}
+.ctx-row{display:flex;align-items:center;gap:3px}
 @keyframes ctxin{from{opacity:0;transform:translateY(5px) scale(.96)}to{opacity:1;transform:none}}
 .ctx::after{
   content:"";position:absolute;left:50%;bottom:-5px;translate:-50% 0;width:9px;height:9px;
@@ -533,6 +534,15 @@ textarea.src:focus{border-color:var(--vermilion)}
 .ctx .sw{width:22px;height:22px}
 .ctx .swrow{display:flex;gap:4px;padding:0 4px}
 .ctx .val{font:500 12px/1 var(--mono);color:var(--cyan);padding:0 6px;min-width:52px;text-align:center}
+/* the description strip — one line of free text that feeds the render prompt */
+.ctx-desc{display:flex;align-items:center;gap:7px;padding:1px 7px 3px}
+.ctx-desc>svg{width:15px;height:15px;color:var(--brass);flex:none}
+.ctx-desc input{
+  flex:1;height:29px;min-width:260px;padding:0 9px;border-radius:5px;background:var(--sunken);
+  border:1px solid var(--line);font:400 12px/1 var(--sans);color:var(--tx);
+}
+.ctx-desc input:focus{border-color:var(--brass)}
+.ctx-desc input::placeholder{color:var(--tx-3)}
 
 /* ---------- image-generator export ---------- */
 .modal.ai{max-width:1000px}

@@ -77,6 +77,22 @@ layer toggles, floor management. The choice is remembered.
 
 Copy either to the clipboard, or download the image.
 
+### Descriptions
+
+Every object and every room takes a **description** — free text, empty by default. Select something
+and press the ✦ button for a one-line field; the Pro inspector has the same field with more room.
+Whatever you write is spliced in next to that object or room, and the brief then tells the model
+these are deliberate instructions rather than flavour text:
+
+```
+- Woonkamer, 26.2 m², on the west side — wide oak floorboards, low winter light.
+  Contains: sofa 3-seat (225×95 cm) — dark green velvet, mid-century, low back; coffee table (110×60 cm).
+```
+
+A described object is listed even when it is a fitted unit imported from the listing, which is
+otherwise skipped as noise. Object descriptions follow the *List the furniture* toggle; room
+descriptions are always included.
+
 ## The rest
 
 - 120 objects at real dimensions, across Living, Dining, Bedroom, Kitchen, Bathroom, Structure,
