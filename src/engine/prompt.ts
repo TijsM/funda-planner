@@ -1,5 +1,5 @@
 import type { Area, Floor, Item, Pt, Project } from './types';
-import { clamp, compass, polyArea, polyCentroid, pointInPoly, unitNormal } from './geometry';
+import { bearing, compass, polyArea, polyCentroid, pointInPoly, unitNormal } from './geometry';
 import { CAT_BY_KIND } from './catalog';
 import { descOf, labelOf, shellBBox } from './model';
 
@@ -23,6 +23,10 @@ export interface PlanFacts {
   windowSides: [string, number][];
   w: number; h: number;
   total: number;
+  /** Do the drawn room polygons actually account for the building? When they do
+   *  not, `total` is a fraction of the real floor and must not be presented as
+   *  its area — an unmapped open plan reported 1.9 m² inside a 74 m² footprint. */
+  mapped: boolean;
   notes: string[];
 }
 
@@ -61,17 +65,27 @@ export function planFacts(f: Floor): PlanFacts {
   });
 
   const windows: string[] = [], doors: string[] = [];
-  f.walls.forEach(w => w.openings.forEach(o => {
+  const mid = { x: (b.x0 + b.x1) / 2, y: (b.y0 + b.y1) / 2 };
+  f.walls.forEach(w => {
+    if (!w.openings.length) return;
+    /* Which way the wall faces, not where the opening sits along it. Tallying
+       the opening's own octant made a run of windows across one elevation come
+       back as two diagonals, so a plain rectangle reported all four — which
+       says nothing about where the light comes from. */
     const n = unitNormal(w.a, w.b);
-    const t = clamp(o.at, 0, 1) * n.L;
-    const p = { x: w.a.x + n.ux * t, y: w.a.y + n.uy * t };
-    (o.type === 'window' ? windows : doors).push(compass(p, b));
-  }));
+    const c = { x: (w.a.x + w.b.x) / 2, y: (w.a.y + w.b.y) / 2 };
+    const out = (c.x - mid.x) * n.x + (c.y - mid.y) * n.y < 0 ? -1 : 1;
+    const dir = bearing(n.x * out, n.y * out);
+    w.openings.forEach(o => (o.type === 'window' ? windows : doors).push(dir));
+  });
   const tally = (arr: string[]): [string, number][] => {
     const c: Record<string, number> = {};
     arr.forEach(s => { c[s] = (c[s] || 0) + 1; });
     return Object.entries(c).sort((a, b2) => b2[1] - a[1]);
   };
+
+  const total = f.areas.reduce((s, a) => s + polyArea(a.poly), 0);
+  const footprint = Math.max(1, (b.x1 - b.x0) * (b.y1 - b.y0));
 
   return {
     rooms,
@@ -80,7 +94,8 @@ export function planFacts(f: Floor): PlanFacts {
     windowSides: tally(windows),
     w: (b.x1 - b.x0) / 100,
     h: (b.y1 - b.y0) / 100,
-    total: f.areas.reduce((s, a) => s + polyArea(a.poly), 0),
+    total,
+    mapped: total >= footprint * 0.55,
     notes: f.notes
       .map(n => String(n.text).replace(/\s+/g, ' ').trim())
       .filter(t => t && !/geen rechten|©|zibber/i.test(t)),
@@ -140,7 +155,9 @@ export function buildPrompt(project: Project, f: Floor, opts: PromptOpts): strin
   L.push('SUBJECT');
   L.push(only
     ? `The ${only.name} of ${addr}${dim ? ` — ${(only.area / 10000).toFixed(1)} m²` : ''}, on the ${f.name.toLowerCase()}.`
-    : `${addr} — "${f.name}"${dim ? `, ${(F.total / 10000).toFixed(1)} m² over ${F.rooms.length} named rooms, overall footprint ${F.w.toFixed(1)} × ${F.h.toFixed(1)} m` : ''}.`);
+    : `${addr} — "${f.name}"${dim ? `, ${F.mapped
+      ? `${(F.total / 10000).toFixed(1)} m² over ${F.rooms.length} named room${F.rooms.length === 1 ? '' : 's'}, overall footprint `
+      : 'overall footprint '}${F.w.toFixed(1)} × ${F.h.toFixed(1)} m` : ''}.`);
   L.push('North is at the top of the plan.', '');
 
   L.push(only ? 'THE ROOM' : 'LAYOUT — reproduce exactly, do not invent or omit rooms');
@@ -178,7 +195,11 @@ export function buildPrompt(project: Project, f: Floor, opts: PromptOpts): strin
 
   if (!only) {
     L.push('OPENINGS AND LIGHT');
-    if (F.windowSides.length) {
+    if (F.windowSides.length >= 5) {
+      /* A list of six or seven compass points is the same as saying nothing —
+         state the fact instead of enumerating it. */
+      L.push('Glazing on nearly every elevation — even daylight from all around.');
+    } else if (F.windowSides.length) {
       const many = F.windowSides.some(([, n]) => n > 1);
       const sides = F.windowSides.map(([s, n]) => (many ? `${s} (${n})` : s));
       const list = sides.length > 1 ? `${sides.slice(0, -1).join(', ')} and ${sides[sides.length - 1]}` : sides[0];

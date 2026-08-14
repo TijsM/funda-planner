@@ -101,6 +101,71 @@ describe('paint', () => {
   });
 });
 
+describe('print measurements', () => {
+  const project = fmlToProject(fml, parseFundaSource(listing));
+  const floor = project.floors[1];
+  const base = { floor, view: VIEW, width: 1200, height: 800, layers: LAYERS } as const;
+
+  it('adds dimension chains and room sizes without NaN', () => {
+    const off = recordingCtx();
+    paint(off.ctx as never, base);
+    const on = recordingCtx();
+    expect(() => paint(on.ctx as never, { ...base, measures: true })).not.toThrow();
+    /* two chains with witness lines and ticks, plus a size row per named room */
+    expect(on.calls.fillText).toBeGreaterThan(off.calls.fillText);
+    expect(on.calls.stroke).toBeGreaterThan(off.calls.stroke);
+
+  });
+
+  /* Counted exactly, on a floor with no labels of its own: two chain captions
+     plus the scale bar — which a flat export never used to get at all, because
+     paint() returns early when live is false, before the bar at the bottom. */
+  it('adds exactly two captions and a scale bar', () => {
+    const bare = { ...floor, areas: [], items: [], notes: [], dims: [], lines: [] };
+    const off = recordingCtx();
+    paint(off.ctx as never, { ...base, floor: bare });
+    expect(off.calls.fillText ?? 0).toBe(0);
+
+    const on = recordingCtx();
+    paint(on.ctx as never, { ...base, floor: bare, measures: true });
+    expect(on.calls.fillText).toBe(3);
+    /* the two chain captions are haloed so they read over the plan; the bar,
+       sitting in the margin, is not */
+    expect(on.calls.strokeText).toBe(2);
+  });
+
+  it('survives a floor with nothing to measure', () => {
+    const empty = { ...floor, walls: [], areas: [], items: [], notes: [], dims: [], lines: [] };
+    const { ctx } = recordingCtx();
+    expect(() => paint(ctx as never, { ...base, floor: empty, measures: true })).not.toThrow();
+  });
+
+  /* The prompt tells the model the reference carries no lettering. It has to be
+     true: a label in the conditioning image bleeds through into the render. */
+  it('the generator reference contains no text whatsoever', () => {
+    const { ctx, calls } = recordingCtx();
+    paint(ctx as never, {
+      ...base,
+      layers: { rooms: true, areas: false, furn: true, dims: false, notes: false },
+      floor: { ...floor, notes: [] },
+      roomLabels: false,
+      objectLabels: false,
+    });
+    expect(calls.fillText ?? 0).toBe(0);
+    expect(calls.strokeText ?? 0).toBe(0);
+    expect(calls.fill).toBeGreaterThan(20);          // it did draw the plan
+  });
+
+  it('object labels are on by default, so the print keeps them', () => {
+    const { calls } = (() => {
+      const r = recordingCtx();
+      paint(r.ctx as never, { ...base, roomLabels: false });
+      return r;
+    })();
+    expect(calls.fillText).toBeGreaterThan(0);
+  });
+});
+
 describe('catalogue glyphs', () => {
   it('every glyph survives its own size and absurd ones', () => {
     const entries = CATALOG.flatMap(g => g.items);

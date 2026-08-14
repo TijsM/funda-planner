@@ -1,5 +1,5 @@
 import type { Floor, Layers, Project } from '@engine/types';
-import { contentBBox, floorArea } from '@engine/model';
+import { contentBBox, floorArea, shellBBox } from '@engine/model';
 import { fmtM2, R2 } from '@engine/geometry';
 import { paint } from '@engine/render';
 import { parseProject, serializeProject, slug } from '@engine/io/serialize';
@@ -55,14 +55,27 @@ export function readImageFile(file: File, onDone?: () => void) {
  *  strips everything that would confuse an image generator. */
 export function renderFloorCanvas(
   f: Floor,
-  opts: { clean?: boolean; furniture?: boolean; roomLabels?: boolean; maxPx?: number; layers?: Layers } = {},
+  opts: {
+    clean?: boolean; furniture?: boolean; roomLabels?: boolean; maxPx?: number;
+    layers?: Layers; measures?: boolean;
+  } = {},
 ): HTMLCanvasElement | null {
   const b = contentBBox({ ...f, notes: opts.clean ? [] : f.notes, ref: null });
   if (!b) return null;
-  const pad = opts.clean ? 40 : 70;
-  const wCm = b.x1 - b.x0 + pad * 2;
-  const hCm = b.y1 - b.y0 + pad * 2;
-  const zoom = Math.max(0.15, Math.min((opts.maxPx ?? 3600) / Math.max(wCm, hCm), 6));
+  const maxPx = opts.maxPx ?? 3600;
+  const fit = (pad: number) => {
+    const wCm = b.x1 - b.x0 + pad * 2;
+    const hCm = b.y1 - b.y0 + pad * 2;
+    return { wCm, hCm, zoom: Math.max(0.15, Math.min(maxPx / Math.max(wCm, hCm), 6)) };
+  };
+
+  /* The dimension chains are drawn at a fixed pixel offset, so the margin has
+     to be a fixed number of pixels too — which means solving for it once the
+     scale is known, rather than picking a distance in centimetres. */
+  let pad = opts.clean ? 40 : 70;
+  if (opts.measures) pad = Math.max(pad, 88 / fit(pad).zoom);
+  const { wCm, hCm, zoom } = fit(pad);
+
   const cv = document.createElement('canvas');
   cv.width = Math.round(wCm * zoom);
   cv.height = Math.round(hCm * zoom);
@@ -80,6 +93,10 @@ export function renderFloorCanvas(
     dpr: 1, layers, grid: false, live: false,
     roomLabels: opts.roomLabels !== false,
     vignette: false,
+    measures: opts.measures,
+    /* The generator reference must carry no lettering at all — the prompt tells
+       the model there is none, and a label bleeds through into the render. */
+    objectLabels: !opts.clean,
   });
   return cv;
 }
@@ -88,7 +105,7 @@ export function exportPng() {
   const s = ed();
   const f = s.floor();
   if (!f || !s.project) return;
-  const cv = renderFloorCanvas(f, { maxPx: 3600 });
+  const cv = renderFloorCanvas(f, { maxPx: 3600, measures: true });
   if (!cv) { s.toast('Nothing to export on this floor.', 'err'); return; }
   const ctx = cv.getContext('2d')!;
 
@@ -101,8 +118,16 @@ export function exportPng() {
   ctx.font = `400 ${Math.max(10, cv.width / 96)}px "IBM Plex Mono", monospace`;
   ctx.fillStyle = '#7A7261';
   const A = floorArea(f);
+  const sb = shellBBox(f);
+  const foot = sb && sb.x1 > sb.x0
+    ? `${((sb.x1 - sb.x0) / 100).toFixed(2)} × ${((sb.y1 - sb.y0) / 100).toFixed(2)} m`
+    : null;
+  /* the importer names the project after the address, so printing both is noise */
+  const addr = s.project.source?.address;
+  const dupe = addr && s.project.name.includes(addr);
   ctx.fillText(
-    [s.project.source?.address, A ? `${fmtM2(A)} m²` : null].filter(Boolean).join('   ·   '),
+    [dupe ? null : addr, A ? `${fmtM2(A)} m² of rooms` : null, foot ? `footprint ${foot}` : null]
+      .filter(Boolean).join('   ·   '),
     22, 18 + Math.max(20, cv.width / 50),
   );
 

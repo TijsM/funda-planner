@@ -70,6 +70,16 @@ export function unitNormal(a: Pt, b: Pt) {
   return { x: -dy / L, y: dx / L, ux: dx / L, uy: dy / L, L };
 }
 
+const POINTS = ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'];
+
+/** Which way a facing vector points, top of the plan being north. y grows
+ *  downward, so a vector of (0,-1) is north. */
+export function bearing(dx: number, dy: number): string {
+  if (!dx && !dy) return 'central';
+  const deg = ((Math.atan2(dy, dx) * 180) / Math.PI + 450) % 360;   // 0 = north, clockwise
+  return POINTS[Math.round(deg / 45) % 8];
+}
+
 /** top of the plan is north — the convention every floor plan already uses */
 export function compass(p: Pt, b: BBox): string {
   const w = Math.max(1, b.x1 - b.x0), h = Math.max(1, b.y1 - b.y0);

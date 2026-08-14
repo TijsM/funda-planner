@@ -4,7 +4,7 @@ import path from 'node:path';
 import {
   CATALOG, CAT_BY_KIND, blankProject, buildPrompt, contentBBox, fmlToProject, migrate,
   newProject, parseFundaSource, parseProject, planFacts, pointInPoly, polyArea, polyCentroid,
-  rotPt, serializeProject, setLabel, setDesc, descOf, labelOf, makeItem, newArea,
+  rotPt, serializeProject, setLabel, setDesc, descOf, labelOf, makeItem, newArea, bearing,
   shellBBox, snapAngle, snapPoint, axisLock,
   fitTo, zoomAt, toScreen, toWorld, handlesFor, hitTest, resolveSel,
 } from '@engine/index';
@@ -245,6 +245,92 @@ describe('image-generator prompt', () => {
 
   it('folds in a free-text style', () => {
     expect(buildPrompt(p, floor, { ...base, style: 'warm oak' })).toContain('warm oak');
+  });
+});
+
+describe('compass bearings', () => {
+  it('reads a facing vector, y-down', () => {
+    expect(bearing(0, -1)).toBe('north');
+    expect(bearing(0, 1)).toBe('south');
+    expect(bearing(1, 0)).toBe('east');
+    expect(bearing(-1, 0)).toBe('west');
+    expect(bearing(1, -1)).toBe('north-east');
+    expect(bearing(-1, 1)).toBe('south-west');
+    expect(bearing(0, 0)).toBe('central');
+  });
+});
+
+describe('openings report the wall they are in, not their own octant', () => {
+  /* A run of windows across one elevation used to come back as two diagonals,
+     so a plain rectangle reported all four and the light direction said
+     nothing. Facing is a property of the wall. */
+  const rect = () => {
+    const p = blankProject('x', false);
+    const f = p.floors[0];
+    f.walls.forEach(w => { w.openings = []; });
+    return { p, f };
+  };
+
+  it('puts three windows spread along the top wall all in the north', () => {
+    const { f } = rect();
+    const top = f.walls.find(w => w.a.y === 0 && w.b.y === 0)!;
+    [0.15, 0.5, 0.85].forEach((at, i) =>
+      top.openings.push({ id: `w${i}`, at, type: 'window', width: 80, flip: 0, side: 0 }));
+    expect(planFacts(f).windowSides).toEqual([['north', 3]]);
+  });
+
+  it('reports exactly the two glazed elevations of a rectangle', () => {
+    const { f } = rect();
+    const byY = (y: number) => f.walls.find(w => w.a.y === y && w.b.y === y)!;
+    byY(0).openings.push({ id: 'a', at: 0.3, type: 'window', width: 80, flip: 0, side: 0 });
+    byY(1000).openings.push({ id: 'b', at: 0.7, type: 'window', width: 80, flip: 0, side: 0 });
+    const sides = planFacts(f).windowSides.map(([d]) => d);
+    expect(sides.sort()).toEqual(['north', 'south']);
+    expect(sides.some(d => d.includes('-'))).toBe(false);
+  });
+
+  it('says so plainly rather than listing five or more elevations', () => {
+    const p = blankProject('x', false);
+    const f = p.floors[0];
+    f.walls.forEach(w => { w.openings = []; });
+    /* an octagon-ish shell: one glazed wall facing each way */
+    f.walls.length = 0;
+    const R = 400;
+    for (let i = 0; i < 8; i++) {
+      const a = { x: R * Math.cos((i / 8) * 6.2832), y: R * Math.sin((i / 8) * 6.2832) };
+      const b = { x: R * Math.cos(((i + 1) / 8) * 6.2832), y: R * Math.sin(((i + 1) / 8) * 6.2832) };
+      f.walls.push({ id: `w${i}`, a, b, t: 20,
+        openings: [{ id: `o${i}`, at: 0.5, type: 'window', width: 100, flip: 0, side: 0 }] });
+    }
+    expect(planFacts(f).windowSides.length).toBeGreaterThanOrEqual(5);
+    const out = buildPrompt(p, f, { view: 'top', furniture: false, dimensions: false });
+    expect(out).toMatch(/nearly every elevation/i);
+    expect(out).not.toMatch(/Windows on the .*and.*sides/);
+  });
+});
+
+describe('the area headline stays coherent with the footprint', () => {
+  it('drops the room total when the rooms do not account for the building', () => {
+    const p = blankProject('Open plan', false);
+    const f = p.floors[0];
+    /* 8 × 10 m of walls, but only a 1 m² polygon drawn */
+    f.areas[0].poly = [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }];
+    expect(planFacts(f).mapped).toBe(false);
+
+    const out = buildPrompt(p, f, { view: 'top', furniture: false, dimensions: true });
+    const subject = out.split('\n')[3];
+    expect(subject).toContain('overall footprint 8.0 × 10.0 m');
+    expect(subject).not.toMatch(/m² over/);          // no 1.0 m² inside an 80 m² shell
+  });
+
+  it('keeps the total when the rooms do cover the plan, and counts them properly', () => {
+    const p = blankProject('Mapped', false);
+    const f = p.floors[0];
+    f.areas[0].name = 'Woonkamer';
+    expect(planFacts(f).mapped).toBe(true);
+    const subject = buildPrompt(p, f, { view: 'top', furniture: false, dimensions: true })
+      .split('\n')[3];
+    expect(subject).toMatch(/80\.0 m² over 1 named room, overall footprint 8\.0 × 10\.0 m/);
   });
 });
 
