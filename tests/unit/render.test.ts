@@ -117,7 +117,7 @@ describe('catalogue glyphs', () => {
 describe('L-shaped seating', () => {
   /* Capture the first closed path a glyph builds — for these it is the outline
      itself, so the shape can be asserted rather than eyeballed. */
-  function outlineOf(kind: string) {
+  function outlineOf(kind: string, size?: [number, number]) {
     const pts: Pt[] = [];
     let open = true;
     const o: Record<string, unknown> = {};
@@ -129,17 +129,20 @@ describe('L-shaped seating', () => {
     o.lineTo = (x: number, y: number) => { if (open) pts.push({ x, y }); };
     o.closePath = () => { open = false; };
     o.measureText = () => ({ width: 40 });
-    const e = CAT_BY_KIND[kind];
+    const c = CAT_BY_KIND[kind];
+    const e = { ...c, w: size ? size[0] : c.w, h: size ? size[1] : c.h };
     e.draw(o as never, e.w, e.h, 0.5);
     return { pts, e };
   }
+
+  /** the deepest point of the notch — dead centre of the open corner */
+  const notch = (e: { w: number; h: number }) => ({ x: e.w * .3, y: e.h * .3 });
 
   for (const kind of ['sofaL', 'sofaChaise']) {
     it(`${kind} leaves the far corner as open floor`, () => {
       const { pts, e } = outlineOf(kind);
       expect(pts).toHaveLength(6);                       // an L, not a rectangle
-      /* the notch: deep inside the corner opposite the two arms */
-      expect(pointInPoly({ x: e.w / 2 - 20, y: e.h / 2 - 20 }, pts)).toBe(false);
+      expect(pointInPoly(notch(e), pts)).toBe(false);
       /* and the two arms are solid */
       expect(pointInPoly({ x: -e.w / 2 + 20, y: -e.h / 2 + 20 }, pts)).toBe(true);
       expect(pointInPoly({ x: e.w / 2 - 20, y: -e.h / 2 + 20 }, pts)).toBe(true);
@@ -147,9 +150,24 @@ describe('L-shaped seating', () => {
     });
   }
 
+  /* An L whose arms meet is a rectangle. Seat depth is physical, so it has to
+     yield to the footprint rather than swallow the notch. */
+  it('stays an L at any size, including a square and a tiny one', () => {
+    for (const [w, h] of [[265, 200], [200, 200], [150, 150], [100, 100], [80, 80], [400, 150]]) {
+      const { pts, e } = outlineOf('sofaL', [w, h]);
+      const at = `${w}×${h}`;
+      expect(pointInPoly(notch(e), pts), `${at} lost its notch`).toBe(false);
+      /* the notch is a real area, not a sliver — measured off the inner corner,
+         which the outline puts at index 3 */
+      const inner = pts[3];
+      expect((w / 2 - inner.x) / w, at).toBeGreaterThan(.4);
+      expect((h / 2 - inner.y) / h, at).toBeGreaterThan(.4);
+    }
+  });
+
   it('a straight sofa fills its whole footprint, which is the contrast', () => {
     const { pts, e } = outlineOf('sofa3');
-    expect(pointInPoly({ x: e.w / 2 - 20, y: e.h / 2 - 20 }, pts)).toBe(true);
+    expect(pointInPoly(notch(e), pts)).toBe(true);
   });
 
   it('is findable by the words a person would actually type', () => {

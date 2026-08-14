@@ -42,7 +42,11 @@ export const G = {
    *  `chaise` drops the back off the return arm, so it reads as a chaise
    *  longue rather than a second seating run. Mirror handles the other hand. */
   lseat(g: Ctx, w: number, h: number, depth?: number, chaise?: number) {
-    const d = Math.max(8, Math.min(depth || 92, Math.min(w, h) - 8));
+    /* Seat depth is physical (~92 cm) and stays that at any real sofa size,
+     *  but it may never eat the notch: an L whose arms meet is a rectangle.
+     *  Capping at 55% of the short side keeps a notch of at least 45% × 45%,
+     *  so this reads as an L even when resized down to a square. */
+    const d = Math.max(1, Math.min(depth || 92, Math.min(w, h) * .55));
     const b = Math.min(28, d * .3);                    // backrest thickness
     g.beginPath();
     g.moveTo(-w / 2, -h / 2); g.lineTo(w / 2, -h / 2);
