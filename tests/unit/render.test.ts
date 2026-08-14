@@ -166,6 +166,80 @@ describe('print measurements', () => {
   });
 });
 
+describe('annotation scales with the output resolution', () => {
+  const project = fmlToProject(fml, parseFundaSource(listing));
+  const floor = project.floors[1];
+  const base = { floor, view: VIEW, width: 1200, height: 800, layers: LAYERS } as const;
+
+  /** records what was written and where, plus the font in force at the time */
+  function textCtx() {
+    const out: { text: string; x: number; y: number; px: number }[] = [];
+    let px = 0;
+    const o: Record<string, unknown> = {};
+    for (const m of [
+      'beginPath', 'moveTo', 'lineTo', 'closePath', 'stroke', 'fill', 'arc', 'ellipse', 'rect',
+      'strokeRect', 'fillRect', 'save', 'restore', 'translate', 'rotate', 'scale', 'setTransform',
+      'clip', 'quadraticCurveTo', 'setLineDash', 'drawImage', 'strokeText',
+    ]) o[m] = () => {};
+    o.fillText = (text: string, x: number, y: number) => out.push({ text, x, y, px });
+    o.measureText = () => ({ width: 40 });
+    o.getLineDash = () => [];
+    o.createRadialGradient = () => ({ addColorStop() {} });
+    const ctx = new Proxy(o, {
+      get: (t, k) => (k in t ? t[k as string] : undefined),
+      set: (_t, k, v) => {
+        if (k === 'font') px = parseFloat(String(v).match(/(\d+(?:\.\d+)?)px/)?.[1] ?? '0');
+        return true;
+      },
+    });
+    return { ctx, out };
+  }
+
+  it('multiplies the font size actually set', () => {
+    const one = textCtx();
+    paint(one.ctx as never, { ...base, measures: true });
+    const three = textCtx();
+    paint(three.ctx as never, { ...base, measures: true, textScale: 3 });
+
+    const biggest = (r: typeof one.out) => Math.max(...r.map(t => t.px));
+    expect(biggest(three.out)).toBeCloseTo(biggest(one.out) * 3, 1);
+  });
+
+  /* Twice now the stack has collided: the pitch was in screen pixels while the
+     text was drawn at size × scale. One room, so every captured row belongs to
+     the same stack and the gaps mean what they look like. */
+  it('never stacks a room label on top of itself', () => {
+    const solo = blankProject('x', false).floors[0];
+    solo.areas[0].name = 'Woonkamer';
+    solo.items = []; solo.dims = []; solo.lines = []; solo.notes = [];
+    const view: View = { zoom: 1, px: 200, py: 200 };
+
+    for (const textScale of [1, 2, 2.75, 4, 6]) {
+      const { ctx, out } = textCtx();
+      paint(ctx as never, {
+        floor: solo, view, width: 1400, height: 1600, layers: LAYERS,
+        measures: true, textScale,
+      });
+      const stack = out.filter(t => /Woonkamer|m²|×/.test(t.text)).sort((a, b) => a.y - b.y);
+      expect(stack.length, `scale ${textScale}`).toBe(3);
+      for (let i = 1; i < stack.length; i++) {
+        const gap = stack[i].y - stack[i - 1].y;
+        expect(gap, `scale ${textScale}: rows ${gap.toFixed(1)}px apart`)
+          .toBeGreaterThanOrEqual(Math.max(stack[i].px, stack[i - 1].px));
+      }
+    }
+  });
+
+  it('drops the labels a small room can no longer hold', () => {
+    const one = textCtx();
+    paint(one.ctx as never, { ...base, measures: true });
+    const big = textCtx();
+    paint(big.ctx as never, { ...base, measures: true, textScale: 4 });
+    /* the 0.1 m² cupboards earn a caption at 1× and not at 4× */
+    expect(big.out.length).toBeLessThan(one.out.length);
+  });
+});
+
 describe('catalogue glyphs', () => {
   it('every glyph survives its own size and absurd ones', () => {
     const entries = CATALOG.flatMap(g => g.items);

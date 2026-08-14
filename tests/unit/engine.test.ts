@@ -6,7 +6,7 @@ import {
   newProject, parseFundaSource, parseProject, planFacts, pointInPoly, polyArea, polyCentroid,
   rotPt, serializeProject, setLabel, setDesc, descOf, labelOf, makeItem, newArea, bearing,
   shellBBox, snapAngle, snapPoint, axisLock,
-  fitTo, zoomAt, toScreen, toWorld, handlesFor, hitTest, resolveSel,
+  fitTo, zoomAt, toScreen, toWorld, handlesFor, hitTest, resolveSel, placeOf,
 } from '@engine/index';
 import type { Fml } from '@engine/io/funda';
 import type { Item, Layers, View } from '@engine/types';
@@ -334,6 +334,68 @@ describe('the area headline stays coherent with the footprint', () => {
   });
 });
 
+describe('objects say where they are', () => {
+  /* A comma-separated bag of nouns leaves placement to the model, and it moves
+     things: a fireplace drawn on the left wall came back mid-floor. */
+  const b = { x0: 0, y0: 0, x1: 600, y1: 1200 };
+  const at = (x: number, y: number) => placeOf({ ...makeItem('chair', { x, y }) }, b);
+
+  it('names the cell of the plan, not a coordinate', () => {
+    expect(at(40, 300)).toBe('against the left wall, upper');
+    expect(at(100, 100)).toBe('top-left');          // 1 m in is not "against"
+    expect(at(300, 50)).toBe('against the top wall, centre');
+    expect(at(300, 600)).toBe('the middle of the floor');
+    expect(at(150, 600)).toBe('middle-left');
+    expect(at(450, 600)).toBe('middle-right');
+    expect(at(300, 1160)).toBe('against the bottom wall, centre');
+    expect(at(560, 600)).toBe('against the right wall, middle');
+  });
+
+  it('prefers the wall an object is pressed against', () => {
+    /* 40 cm from the left edge is against that wall, whatever cell it is in */
+    expect(at(40, 200)).toMatch(/^against the left wall/);
+    expect(at(40, 1000)).toMatch(/^against the left wall/);
+    /* and 2 m in from it is not */
+    expect(at(150, 300)).not.toMatch(/against/);
+  });
+
+  it('lists them in the order a plan is read, top to bottom', () => {
+    const p = blankProject('x', false);
+    const f = p.floors[0];
+    f.areas = [];
+    const add = (y: number, name: string) => {
+      const i = makeItem('chair', { x: 400, y });
+      setLabel(i, name);
+      f.items.push(i);
+    };
+    add(900, 'gamma'); add(200, 'alpha'); add(550, 'beta');
+
+    const out = buildPrompt(p, f, { view: 'top', furniture: true, dimensions: false });
+    expect(planFacts(f).loose.map(i => labelOf(i))).toEqual(['alpha', 'beta', 'gamma']);
+    expect(out.indexOf('alpha')).toBeLessThan(out.indexOf('beta'));
+    expect(out.indexOf('beta')).toBeLessThan(out.indexOf('gamma'));
+    /* one line each, with a position — not a comma list */
+    expect(out).not.toMatch(/Elsewhere on the floor/);
+    expect(out).toMatch(/OBJECTS/);
+  });
+
+  it('tells the model a staircase is a staircase', () => {
+    const p = blankProject('x', false);
+    const f = p.floors[0];
+    const i = makeItem('stairU', { x: 400, y: 500 });
+    setLabel(i, 'stairs up');
+    f.items.push(i);
+    const out = buildPrompt(p, f, { view: 'top', furniture: true, dimensions: true });
+    expect(out).toMatch(/staircase goes up to the floor above/);
+    expect(out).toMatch(/not as furniture and not as a corridor/);
+
+    /* and it says so even when the stair sits inside a named room */
+    f.areas[0].name = 'Hal';
+    expect(buildPrompt(p, f, { view: 'top', furniture: true, dimensions: true }))
+      .toMatch(/not as furniture and not as a corridor/);
+  });
+});
+
 describe('object descriptions', () => {
   /* a fresh project per test — descriptions are written into the document */
   const plan = () => {
@@ -414,17 +476,32 @@ describe('object descriptions', () => {
     expect(out.split('\n').filter(l => l.startsWith('- Woonkamer'))).toHaveLength(1);
   });
 
-  it('surfaces a described fitted object, which is otherwise skipped', () => {
+  it('surfaces a fitted object once it has a name or a description', () => {
     const { q, f } = plan();
     const woon = f.areas.find(a => a.name === 'Woonkamer')!;
     const c = polyCentroid(woon.poly);
-    const fitted = { ...makeItem('sofa3', c), fromFunda: 1 as const, label: 'Kitchen run' };
-    f.items.push(fitted);
 
-    expect(buildPrompt(q, f, base)).not.toContain('kitchen run');
-    setDesc(fitted, 'matte black cabinetry, brass handles');
+    /* anonymous is noise: the .fml ships dozens of unnamed boxes */
+    const anon = { ...makeItem('sofa3', c), fromFunda: 1 as const, label: '', noLabel: 1 as const };
+    f.items.push(anon);
+    expect(buildPrompt(q, f, base)).not.toMatch(/sofa 3-seat/i);
+
+    /* but a name the user typed is the opposite — leaving the staircase out of
+       the text is how a render grows a corridor that is not in the plan */
+    const named = { ...makeItem('sofa3', c), fromFunda: 1 as const, label: 'Kitchen run' };
+    f.items.push(named);
+    expect(buildPrompt(q, f, base).toLowerCase()).toContain('kitchen run');
+
+    setDesc(named, 'matte black cabinetry, brass handles');
+    expect(buildPrompt(q, f, base)).toContain('matte black cabinetry, brass handles');
+  });
+
+  it('warns that unnamed fitted blocks are joinery, not floor', () => {
+    const { q, f } = plan();
+    expect(planFacts(f).anonFitted).toBeGreaterThan(0);
     const out = buildPrompt(q, f, base);
-    expect(out).toContain('matte black cabinetry, brass handles');
+    expect(out).toMatch(/unnamed fitted block/i);
+    expect(out).toMatch(/never open floor, a passage or a corridor/i);
   });
 
   it('drops object descriptions with the furniture, but keeps room ones', () => {

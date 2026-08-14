@@ -27,6 +27,10 @@ export function RenderModal() {
   const [furniture, setFurniture] = useState(true);
   const [dimensions, setDimensions] = useState(true);
   const [roomLabels, setRoomLabels] = useState(false);
+  /* On by default. Lettering on the conditioning image can bleed into a render,
+     so the hint under the preview says so — but that is a trade-off to make at
+     the point of use, not one to make silently on someone's behalf. */
+  const [imgMeasures, setImgMeasures] = useState(true);
   const [prompt, setPrompt] = useState('');
   const [img, setImg] = useState('');
   const [canvas, setCanvas] = useState<HTMLCanvasElement | null>(null);
@@ -52,10 +56,12 @@ export function RenderModal() {
 
   useEffect(() => {
     if (!floor) return;
-    const cv = renderFloorCanvas(floor, { clean: true, furniture, roomLabels, maxPx: 1800 });
+    const cv = renderFloorCanvas(floor, {
+      clean: true, furniture, roomLabels, measures: imgMeasures, maxPx: 1800,
+    });
     setCanvas(cv);
     setImg(cv ? cv.toDataURL('image/png') : '');
-  }, [floor, furniture, roomLabels]);
+  }, [floor, furniture, roomLabels, imgMeasures]);
 
   if (!project || !floor) return null;
 
@@ -142,7 +148,11 @@ export function RenderModal() {
             </label>
             <label className="tg">
               <input type="checkbox" id="aiDims" checked={dimensions} onChange={e => setDimensions(e.target.checked)} />
-              <span className="sw2" /><span>Include measurements</span>
+              <span className="sw2" /><span>Measurements in the prompt</span>
+            </label>
+            <label className="tg">
+              <input type="checkbox" id="aiImgDims" checked={imgMeasures} onChange={e => setImgMeasures(e.target.checked)} />
+              <span className="sw2" /><span>Measurements on the image</span>
             </label>
             <label className="tg">
               <input type="checkbox" id="aiLabels" checked={roomLabels} onChange={e => setRoomLabels(e.target.checked)} />
@@ -161,6 +171,12 @@ export function RenderModal() {
             <div className="ai-prev">{img ? <img id="aiImg" src={img} alt="clean floor plan reference" /> : null}</div>
             <div className="hint">
               Attach this to the generator alongside the prompt so it copies the exact layout.
+              {imgMeasures && (
+                <>
+                  <br />Lettering on the reference can bleed into the render — turn
+                  {' '}<b>Measurements on the image</b> off for the cleanest result.
+                </>
+              )}
             </div>
           </div>
         </div>

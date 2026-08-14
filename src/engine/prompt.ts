@@ -1,4 +1,4 @@
-import type { Area, Floor, Item, Pt, Project } from './types';
+import type { Area, BBox, Floor, Item, Pt, Project } from './types';
 import { bearing, compass, polyArea, polyCentroid, pointInPoly, unitNormal } from './geometry';
 import { CAT_BY_KIND } from './catalog';
 import { descOf, labelOf, shellBBox } from './model';
@@ -22,6 +22,10 @@ export interface PlanFacts {
   doors: number;
   windowSides: [string, number][];
   w: number; h: number;
+  /** the building's own bounds, so positions can be phrased against it */
+  bbox: BBox;
+  /** fitted objects still carrying no name at all — geometry with no meaning */
+  anonFitted: number;
   total: number;
   /** Do the drawn room polygons actually account for the building? When they do
    *  not, `total` is a fraction of the real floor and must not be presented as
@@ -49,9 +53,11 @@ export function planFacts(f: Floor): PlanFacts {
       };
     });
 
-  /* Fitted objects imported from the listing are normally noise — dozens of
-     unnamed boxes. One the user has described is the opposite: deliberate. */
-  const speaks = (i: Item) => !i.fromFunda || !!descOf(i);
+  /* Fitted objects imported from the listing arrive anonymous — the .fml carries
+     no names, only geometry — and dozens of unnamed boxes would flood the brief.
+     But one the user has named or described is the opposite of noise: a staircase
+     left out of the text is how a render grows a corridor that is not there. */
+  const speaks = (i: Item) => !i.fromFunda || !!descOf(i) || !!labelOf(i).trim();
 
   const used = new Set<string>();
   rooms.forEach(r => {
@@ -89,7 +95,12 @@ export function planFacts(f: Floor): PlanFacts {
 
   return {
     rooms,
-    loose: f.items.filter(i => !used.has(i.id) && speaks(i)),
+    /* top-to-bottom, then left-to-right: the order a person reads a plan out loud */
+    loose: f.items
+      .filter(i => !used.has(i.id) && speaks(i))
+      .sort((p, q) => (p.y - q.y) || (p.x - q.x)),
+    bbox: b,
+    anonFitted: f.items.filter(i => i.fromFunda && !speaks(i)).length,
     doors: doors.length,
     windowSides: tally(windows),
     w: (b.x1 - b.x0) / 100,
@@ -141,6 +152,33 @@ function itemList(items: Item[], dim: boolean): string {
   return parts.join(items.some(i => descOf(i)) ? '; ' : ', ');
 }
 
+/** Where a thing sits, phrased against the attached top-down drawing rather than
+ *  in metres — "top-left" lands on the image, "x = 240 cm" does not. Objects
+ *  pressed up against an elevation say so, because that is what stops a model
+ *  floating a fireplace into the middle of the floor. */
+export function placeOf(i: Item, b: BBox): string {
+  const w = Math.max(1, b.x1 - b.x0), h = Math.max(1, b.y1 - b.y0);
+  const fx = (i.x - b.x0) / w, fy = (i.y - b.y0) / h;
+  const band = (t: number, lo: string, mid: string, hi: string) => (t < 1 / 3 ? lo : t > 2 / 3 ? hi : mid);
+  const vert = band(fy, 'upper', 'middle', 'lower');
+
+  /* against a wall: measured in centimetres, since a fraction of a 12 m plan is
+     a metre and a half and would call half the floor "against the wall" */
+  const reach = 90;
+  if (i.x - b.x0 < reach) return `against the left wall, ${vert}`;
+  if (b.x1 - i.x < reach) return `against the right wall, ${vert}`;
+  const horiz = band(fx, 'left', 'centre', 'right');
+  if (i.y - b.y0 < reach) return `against the top wall, ${horiz}`;
+  if (b.y1 - i.y < reach) return `against the bottom wall, ${horiz}`;
+
+  const row = band(fy, 'top', 'middle', 'bottom');
+  const col = band(fx, 'left', 'centre', 'right');
+  return row === 'middle' && col === 'centre' ? 'the middle of the floor' : `${row}-${col}`;
+}
+
+/** A staircase read as anonymous geometry is how a plan grows a corridor. */
+const STAIRS = /stair|trap\b/i;
+
 export function buildPrompt(project: Project, f: Floor, opts: PromptOpts): string {
   const F = planFacts(f);
   const V = AI_VIEWS[opts.view] ?? AI_VIEWS.top;
@@ -181,7 +219,30 @@ export function buildPrompt(project: Project, f: Floor, opts: PromptOpts): strin
     L.push(line);
   });
   if (!only && opts.furniture && F.loose.length) {
-    L.push('- Elsewhere on the floor: ' + itemList(F.loose, false) + '.');
+    /* One line per object, each with where it actually is. A comma-separated bag
+       of nouns leaves placement entirely to the model, which then moves things. */
+    L.push('', 'OBJECTS — each one is already placed; keep it where the plan puts it');
+    F.loose.forEach(i => {
+      const nm = labelOf(i).toLowerCase() || 'object';
+      const d = descOf(i);
+      const size = dim ? ` (${Math.round(i.w)}×${Math.round(i.h)} cm)` : '';
+      L.push(`- ${placeOf(i, F.bbox)}: ${nm}${size}.${d ? ` ${sentence(d)}` : ''}`);
+    });
+  }
+  /* Said once, wherever the stair happens to be listed — inside a named room or
+     out on the floor. An unexplained stair-shaped block is what a render turns
+     into a corridor that does not exist. */
+  if (opts.furniture && rooms.flatMap(r => r.items).concat(only ? [] : F.loose)
+    .some(i => STAIRS.test(labelOf(i)))) {
+    L.push('', 'The staircase goes up to the floor above: draw it as an enclosed run of'
+      + ' steps, not as furniture and not as a corridor.');
+  }
+  /* Outside the block above on purpose: a floor can consist of nothing but
+     anonymous fitted blocks, and that is precisely when this needs saying. */
+  if (!only && opts.furniture && F.anonFitted) {
+    L.push('', `${F.anonFitted} unnamed fitted block${F.anonFitted === 1 ? ' is' : 's are'} drawn on the plan`
+      + ' — kitchen units, sanitary ware, built-in joinery. Reproduce them as built-in cabinetry'
+      + ' against the wall they touch. They are never open floor, a passage or a corridor.');
   }
   /* The descriptions are the one part of this brief a person actually wrote —
      say so, or the model treats them as flavour text alongside the geometry. */

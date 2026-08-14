@@ -157,4 +157,36 @@ test.describe('export for an image generator', () => {
     const dl = await Promise.all([page.waitForEvent('download'), page.locator('#aiDlImg').click()]).then(r => r[0]);
     expect(dl.suggestedFilename()).toMatch(/-reference\.png$/);
   });
+
+  test('measurements on the reference image are on, and can be turned off', async ({ page }) => {
+    test.skip(process.env.E2E_TARGET !== 'next', 'v2 shell feature');
+    await importMocked(page);
+    await page.locator('#fchips .fchip').nth(1).click();
+    await page.waitForTimeout(250);
+    await openAI(page);
+
+    /* On by default, with the trade-off stated where the choice is made rather
+       than decided silently: lettering can bleed into the render. */
+    await expect(page.locator('#aiImgDims')).toBeChecked();
+    await expect(page.locator('.ai-right')).toContainText('bleed into the render');
+
+    const ink = () => page.evaluate(() => {
+      const img = document.querySelector('#aiImg');
+      const c = document.createElement('canvas');
+      c.width = img.naturalWidth; c.height = img.naturalHeight;
+      c.getContext('2d').drawImage(img, 0, 0);
+      const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+      let n = 0;
+      for (let i = 0; i < d.length; i += 4 * 13) if (d[i] < 120) n++;
+      return n;
+    });
+    const measured = await ink();
+
+    await page.locator('.tg:has(#aiImgDims)').click();
+    await expect(page.locator('#aiImgDims')).not.toBeChecked();
+    await page.waitForTimeout(700);
+    await expect(page.locator('.ai-right')).not.toContainText('bleed into the render');
+    /* the chains and captions are dark marks, so removing them leaves fewer */
+    expect(await ink()).toBeLessThan(measured);
+  });
 });
