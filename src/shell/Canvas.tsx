@@ -380,15 +380,26 @@ export function Canvas() {
     draw();
   };
 
-  const onWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
-    const s = ed();
-    const sp = local(e);
-    if (e.ctrlKey || e.metaKey || !e.shiftKey) {
-      s.setView(zoomAt(s.view, sp.x, sp.y, Math.pow(0.9987, e.deltaY * (e.deltaMode === 1 ? 18 : 1))));
-    } else {
-      s.setView({ ...s.view, px: s.view.px - e.deltaX, py: s.view.py - e.deltaY });
-    }
-  };
+  /* Wheel must be a native, non-passive listener. React registers its synthetic
+     wheel handler as passive, so preventDefault() there is ignored — and a
+     trackpad pinch (which arrives as wheel + ctrlKey) would zoom the whole page
+     instead of the plan. */
+  useEffect(() => {
+    const cv = ref.current;
+    if (!cv) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const s = ed();
+      const sp = local(e);
+      if (e.ctrlKey || e.metaKey || !e.shiftKey) {
+        s.setView(zoomAt(s.view, sp.x, sp.y, Math.pow(0.9987, e.deltaY * (e.deltaMode === 1 ? 18 : 1))));
+      } else {
+        s.setView({ ...s.view, px: s.view.px - e.deltaX, py: s.view.py - e.deltaY });
+      }
+    };
+    cv.addEventListener('wheel', onWheel, { passive: false });
+    return () => cv.removeEventListener('wheel', onWheel);
+  }, []);
 
   const onDoubleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const s = ed();
@@ -422,7 +433,6 @@ export function Canvas() {
       onPointerUp={endDrag}
       onPointerCancel={endDrag}
       onPointerLeave={() => { ed().patch({ hover: null, mouseInside: false }); draw(); }}
-      onWheel={onWheel}
       onDoubleClick={onDoubleClick}
       onContextMenu={e => {
         e.preventDefault();
