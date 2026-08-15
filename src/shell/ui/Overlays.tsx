@@ -3,10 +3,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { ed, useEditor, useEditorShallow, useSelection } from '@state/store';
 import { CATALOG, CAT_BY_KIND, ROOM_SWATCHES, SWATCHES, toneFor } from '@engine/catalog';
-import { dist, fmtM2, polyArea } from '@engine/geometry';
+import { dist, fmtM2, polyArea, R2 } from '@engine/geometry';
 import { labelOf, setDesc, setLabel } from '@engine/model';
 import { selScreenBBox, snapPoint, toWorld } from '@engine/view';
-import type { Area, Item, Note, Opening, SelObj, Wall } from '@engine/types';
+import type { Area, Item, Layers, Note, Opening, SelObj, Wall } from '@engine/types';
 import {
   SPECIALS, addOpeningTo, deleteSelection, duplicateSelection, placeCatalogItem,
   placeSpecial, rotateSelection, type SpecialKind,
@@ -183,14 +183,15 @@ export function GlyphPreview({ kind, w = 124, h = 80 }: { kind: string; w?: numb
 export function ObjectToolbar() {
   const sel = useSelection();
   const view = useEditor(s => s.view);
-  const simple = useEditor(s => s.simple);
   const dragging = useEditor(s => s.marquee);
   const place = useEditor(s => s.place);
   useEditor(s => s.rev); /* reposition after every mutation */
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ x: number; y: number; below: boolean } | null>(null);
 
-  const show = simple && sel.length > 0 && !dragging && !place;
+  /* Used to be Simple-mode only, with Pro's inspector as the alternative. There
+     is no alternative now — this bar is where a selected object is edited. */
+  const show = sel.length > 0 && !dragging && !place;
 
   /* Anything describable shows the row outright. It was behind a button to keep
      the bar narrow, but a field you have to go and find does not get used. */
@@ -256,6 +257,55 @@ function DescRow({ o }: { o: Item | Area }) {
         onChange={e => { const s = ed(); s.pushUndo(); setDesc(o, e.target.value); s.touch(); }}
       />
     </div>
+  );
+}
+
+/** A centimetre field on the selection toolbar. Local text while the caret is
+ *  in it, so half-typed values and an emptied field survive; the document only
+ *  hears about numbers. Same bargain the inspector struck — and it must stay a
+ *  real <input>, because the document keydown guard in Editor.tsx is the only
+ *  thing keeping single letters from firing tool shortcuts mid-word. */
+function CtxNum({ id, value, title, onChange }: {
+  id: string; value: number; title: string; onChange: (v: number) => void;
+}) {
+  const [local, setLocal] = useState<string | null>(null);
+  return (
+    <input
+      className="cnum" id={id} type="number" min={2} step={1} title={title}
+      value={local ?? R2(value)}
+      onPointerDown={e => e.stopPropagation()}
+      onChange={e => {
+        setLocal(e.target.value);
+        const v = parseFloat(e.target.value);
+        if (!Number.isNaN(v)) onChange(v);
+      }}
+      onBlur={() => setLocal(null)}
+      onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter' || e.key === 'Escape') e.currentTarget.blur(); }}
+    />
+  );
+}
+
+/** Width × height, in centimetres, on the selection itself. The numbers used to
+ *  live only in the inspector, which meant reaching for a second mode to say
+ *  "make it 180 wide" — the one thing a dragged handle is bad at. */
+function SizeFields({ o }: { o: Item }) {
+  const c = CAT_BY_KIND[o.kind];
+  const set = (k: 'w' | 'h') => (v: number) => {
+    const s = ed(); s.pushUndo(); o[k] = Math.max(2, v); s.touch();
+  };
+  return (
+    <span className="csize">
+      <CtxNum id="ctxW" value={o.w} title="Width in cm" onChange={set('w')} />
+      <i>×</i>
+      <CtxNum id="ctxH" value={o.h} title="Height in cm" onChange={set('h')} />
+      <u title={`${fmtM2(o.w * o.h)} m² footprint`}>cm</u>
+      {c && (o.w !== c.w || o.h !== c.h) && (
+        <button
+          className="cb" id="ctxSizeReset" title={`Back to the catalogue size, ${c.w}×${c.h} cm`}
+          onClick={e => { e.stopPropagation(); const s = ed(); s.pushUndo(); o.w = c.w; o.h = c.h; s.touch(); }}
+        ><Icon id="i-rot" /></button>
+      )}
+    </span>
   );
 }
 
@@ -336,6 +386,8 @@ function ItemBar({ o }: { o: Item }) {
         onChange={e => { const s = ed(); s.pushUndo(); setLabel(o, e.target.value); s.touch(); }}
       />
       <span className="div" />
+      <SizeFields o={o} />
+      <span className="div" />
       {CB('ctxRot', 'i-rot', 'Rotate 90°', () => { const s = ed(); s.pushUndo(); o.rot = ((o.rot || 0) + 90) % 360; s.touch(); })}
       {CB('ctxFlip', 'i-flip', 'Mirror', () => { const s = ed(); s.pushUndo(); o.flip = o.flip ? 0 : 1; s.touch(); })}
       <span className="div" />
@@ -354,6 +406,14 @@ function WallBar({ o }: { o: Wall }) {
       {CB('ctxWin', 'i-win', 'Put a window in this wall', () => addOpeningTo(o, 'window'), 'pri', 'Window')}
       <span className="div" />
       <span className="val">{Math.round(dist(o.a, o.b))} cm</span>
+      <span className="div" />
+      {/* Thickness had no home but the inspector, and a party wall drawn at the
+          same 10 cm as a stud wall is wrong on the plan and in the render. */}
+      <span className="csize">
+        <CtxNum id="ctxWallT" value={o.t} title="Wall thickness in cm"
+          onChange={v => { const s = ed(); s.pushUndo(); o.t = Math.max(2, Math.min(v, 100)); s.touch(); }} />
+        <u>cm thick</u>
+      </span>
       <span className="div" />
       {CB('ctxDel', 'i-trash', 'Delete wall', deleteSelection, 'dgr')}
     </>
@@ -425,6 +485,57 @@ function NoteBar({ o }: { o: Note }) {
 
 /* ══════════════════ stage furniture ══════════════════ */
 
+const LAYERS: { k: keyof Layers; label: string; id: string }[] = [
+  { k: 'rooms', label: 'Walls & rooms', id: 'vRooms' },
+  { k: 'areas', label: 'Room fills', id: 'vAreas' },
+  { k: 'furn', label: 'Furniture', id: 'vFurn' },
+  { k: 'dims', label: 'Dimension lines', id: 'vDims' },
+  { k: 'notes', label: 'Text notes', id: 'vNotes' },
+];
+
+/** What is drawn on the plan. These lived in the Pro view panel; with the panels
+ *  gone they need a home, and a popover keeps five rarely-touched switches off
+ *  the canvas until someone wants them. */
+function LayerMenu() {
+  const layers = useEditorShallow(s => s.layers);
+  const [open, setOpen] = useState(false);
+  const off = LAYERS.filter(l => !layers[l.k]).length;
+
+  /* click anywhere else to dismiss — a popover that needs its own button
+     pressed again is a popover people leave open */
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: PointerEvent) => {
+      if (!(e.target as HTMLElement).closest('#layerMenu, #tgLayers')) setOpen(false);
+    };
+    document.addEventListener('pointerdown', away);
+    return () => document.removeEventListener('pointerdown', away);
+  }, [open]);
+
+  return (
+    <>
+      <button
+        className={`fb${off ? ' on' : ''}`} id="tgLayers" title="What is drawn on the plan"
+        onClick={() => setOpen(o => !o)}
+      ><Icon id="i-eye" />{off ? <i className="badge">{off}</i> : null}</button>
+      {open && (
+        <div className="lmenu" id="layerMenu">
+          <span className="lbl">Show on the plan</span>
+          {LAYERS.map(l => (
+            <label className="tg" key={l.k}>
+              <input
+                type="checkbox" id={l.id} checked={layers[l.k]}
+                onChange={e => { const s = ed(); s.patch({ layers: { ...s.layers, [l.k]: e.target.checked } }); }}
+              />
+              <span className="sw2" /><span>{l.label}</span>
+            </label>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
 export function StageOverlays({ onFit }: { onFit: () => void }) {
   const { grid, snap, showRef, ghost, view, tool, place } = useEditorShallow(s => ({
     grid: s.grid, snap: s.snap, showRef: s.showRef, ghost: s.ghost,
@@ -466,6 +577,7 @@ export function StageOverlays({ onFit }: { onFit: () => void }) {
           }}
         ><Icon id="i-img" /></button>
         <button className={`fb${ghost ? ' on' : ''}`} id="tgGhost" title="Ghost floor below  (L)" onClick={() => ed().patch({ ghost: !ghost })}><Icon id="i-layer" /></button>
+        <LayerMenu />
       </div>
 
       <div className="floating tr">
@@ -493,9 +605,8 @@ export function StageOverlays({ onFit }: { onFit: () => void }) {
 
 function Coach() {
   const [gone, setGone] = useState(true);
-  const simple = useEditor(s => s.simple);
   useEffect(() => { setGone(coachSeen()); }, []);
-  if (gone || !simple) return null;
+  if (gone) return null;
   return (
     <div className="coach" id="coach">
       <b>Drag anything</b> on the plan to move it · click it for <b>rotate, colour, delete</b>

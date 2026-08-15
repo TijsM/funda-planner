@@ -69,20 +69,19 @@ test.describe('the caret stays where you put it', () => {
     expect(r.focus).toBe('ctxNote');
   });
 
-  test('the Pro inspector fields hold focus too', async ({ page }) => {
+  test('the size fields hold focus too', async ({ page }) => {
     await starter(page);
     await addFromTray(page, 'sofa3', 380, 300);
-    await page.locator('#mPro').click();
-    await page.waitForTimeout(400);
 
-    const d = await typeInto(page, '#inDesc', 'eiken poten');
-    expect(d).toMatchObject({ value: 'eiken poten', focus: 'inDesc' });
+    /* These arrived when the Pro inspector left, and they re-render on every
+       keystroke like everything else on this bar — so they get the same proof. */
+    await page.locator('#ctxW').fill('');
+    const w = await typeInto(page, '#ctxW', '240');
+    expect(w).toMatchObject({ value: '240', focus: 'ctxW' });
 
-    const el = page.locator('#inLabel');
-    await el.click();
-    await el.fill('');
-    const l = await typeInto(page, '#inLabel', 'Bank');
-    expect(l).toMatchObject({ value: 'Bank', focus: 'inLabel' });
+    await page.locator('#ctxH').fill('');
+    const h = await typeInto(page, '#ctxH', '110');
+    expect(h).toMatchObject({ value: '110', focus: 'ctxH' });
   });
 });
 

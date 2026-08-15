@@ -118,6 +118,10 @@ export interface Handle {
   o: Item | Wall | Dim | Line | Area;
   /** corner index for 'res', vertex index for 'vtx' */
   i?: number;
+  /** which way a 'res' handle pulls, in the object's own unrotated frame: ±1 on
+   *  both axes is a corner, a 0 on one axis is a side and leaves that axis
+   *  alone. The drag reads this rather than looking the index back up. */
+  dir?: readonly [number, number];
   /** 'a' | 'b' for 'end' */
   key?: 'a' | 'b';
 }

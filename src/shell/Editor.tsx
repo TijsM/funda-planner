@@ -1,32 +1,31 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect } from 'react';
 import { ed, useEditor } from '@state/store';
 import type { Tool } from '@state/store';
 import { blankProject } from '@engine/model';
 import { fitFloor } from '@engine/view';
 import { Canvas } from './Canvas';
 import { commitDraft, deleteSelection, duplicateSelection, nudge } from './commands';
-import { autosave, readAutosave, readIndex, readMode, saveProject } from './storage';
+import { autosave, readAutosave, readIndex, readRendersBar, saveProject } from './storage';
 import { readImageFile, readJsonFile } from './files';
 import { importFromUrl } from './funda';
 import { IconSprite } from './ui/Icons';
 import { TestBridge } from './TestBridge';
-import { FloorBar, FloorList, StatusBar, TopBar, ToolRail, Totals } from './ui/Chrome';
-import { Inspector, ViewPanel } from './ui/Inspector';
-import { AddTray, GlyphPreview, ObjectToolbar, StageOverlays } from './ui/Overlays';
+import { FloorBar, TopBar, ToolRail } from './ui/Chrome';
+import { AddTray, ObjectToolbar, StageOverlays } from './ui/Overlays';
 import { ModalHost } from './ui/Modals';
 import { RenderModal } from './ui/RenderModal';
+import { RendersBar } from './ui/RendersBar';
 import { Toasts } from './ui/Toasts';
-import { CATALOG } from '@engine/catalog';
 
 const TOOLKEYS: Record<string, Tool> = {
   v: 'select', h: 'pan', w: 'wall', r: 'room', d: 'door', n: 'window', t: 'text', m: 'measure',
 };
 
 export function Editor() {
-  const simple = useEditor(s => s.simple);
   const modal = useEditor(s => s.modal);
+  const rendersOpen = useEditor(s => s.rendersOpen);
   const project = useEditor(s => s.project);
 
   const fit = useCallback(() => {
@@ -36,8 +35,10 @@ export function Editor() {
 
   /* ── boot: deep link, autosave, or the importer ─────────────── */
   useEffect(() => {
+    /* Read before the early return: the sidebar's state is not the project's,
+       and a reload onto an already-loaded editor still has to restore it. */
+    ed().patch({ rendersOpen: readRendersBar() });
     if (ed().project) return;
-    ed().patch({ simple: readMode() !== 'pro' });
 
     const hash = decodeURIComponent(location.hash.slice(1));
     if (hash === 'new' || hash === 'garden') {
@@ -64,9 +65,9 @@ export function Editor() {
   /* fit once the first project lands */
   useEffect(() => { if (project) requestAnimationFrame(fit); }, [project?.id, fit]);
 
-  /* Switching modes changes the canvas width by ~600px. Without a refit the
-     plan stays put and slides under the panels. */
-  useEffect(() => { if (ed().project) requestAnimationFrame(fit); }, [simple, fit]);
+  /* The renders sidebar takes ~290px off the canvas. Without a refit the plan
+     stays where it was and slides under it. */
+  useEffect(() => { if (ed().project) requestAnimationFrame(fit); }, [rendersOpen, fit]);
 
   /* ── autosave + leave guard ─────────────────────────────────── */
   useEffect(() => {
@@ -132,8 +133,8 @@ export function Editor() {
         return;
       }
       if (k === 'l') { s.patch({ ghost: !s.ghost }); return; }
-      if (k === 'a' && s.simple) { e.preventDefault(); s.patch({ trayOpen: !s.trayOpen }); return; }
-      if (!s.simple && TOOLKEYS[k]) { s.patch({ tool: TOOLKEYS[k], place: null, draft: null }); return; }
+      if (k === 'a') { e.preventDefault(); s.patch({ trayOpen: !s.trayOpen }); return; }
+      if (TOOLKEYS[k]) { s.patch({ tool: TOOLKEYS[k], place: null, draft: null }); return; }
 
       const N: Record<string, [number, number]> = {
         ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1],
@@ -169,96 +170,21 @@ export function Editor() {
     <>
       <IconSprite />
       <TestBridge />
-      <div className={`app${simple ? ' simple' : ''}`} id="app">
+      <div className={`app${rendersOpen ? ' renders' : ''}`} id="app">
         <TopBar />
         <ToolRail />
-        <aside className="panel left">
-          <FloorList />
-          <CatalogPanel />
-        </aside>
         <main className={stageClass} id="stage">
           <Canvas />
           <StageOverlays onFit={fit} />
           <ObjectToolbar />
         </main>
-        <aside className="panel right">
-          <section className="sec grow">
-            <div className="sec-h">
-              <span className="lbl" style={{ color: 'var(--vermilion)' }}>Inspector</span>
-              <SelCount />
-            </div>
-            <Inspector />
-          </section>
-          <section className="sec">
-            <div className="sec-h"><span className="lbl">View</span></div>
-            <ViewPanel />
-          </section>
-          <section className="sec">
-            <div className="sec-h"><span className="lbl">Totals</span></div>
-            <Totals />
-          </section>
-        </aside>
+        <RendersBar />
         <FloorBar onFit={fit} />
-        <StatusBar />
       </div>
       <AddTray />
       <ModalHost />
       {modal === 'render' && <RenderModal />}
       <Toasts />
     </>
-  );
-}
-
-function SelCount() {
-  const n = useEditor(s => s.sel.length);
-  return <span className="mono" id="selInfo" style={{ fontSize: 9, color: 'var(--tx-3)' }}>{n ? `${n} selected` : ''}</span>;
-}
-
-/** the Pro-mode catalogue, same data as the tray */
-function CatalogPanel() {
-  const place = useEditor(s => s.place);
-  const [q, setQ] = useState('');
-  const match = (s: string) => !q || s.toLowerCase().includes(q.trim().toLowerCase());
-  const groups = CATALOG
-    .map(g => ({
-      group: g.group,
-      items: g.items.filter(i => match(i.name) || match(g.group) || match(i.alt ?? '')),
-    }))
-    .filter(g => g.items.length);
-  const n = groups.reduce((s, g) => s + g.items.length, 0);
-
-  return (
-    <section className="sec grow">
-      <div className="sec-h">
-        <span className="lbl" style={{ color: 'var(--brass)' }}>Furniture &amp; objects</span>
-        <span className="mono" id="catCount" style={{ fontSize: 9, color: 'var(--tx-3)' }}>{n} items</span>
-      </div>
-      <div className="cat-search" style={{ marginTop: 9 }}>
-        <svg><use href="#i-search" /></svg>
-        <input id="catSearch" placeholder="filter — sofa, bed, tree…" spellCheck={false}
-          value={q} onChange={e => setQ(e.target.value)} onKeyDown={e => e.stopPropagation()} />
-      </div>
-      <div className="sec-b" id="catalog" style={{ paddingTop: 0 }}>
-        {!groups.length && <div className="empty"><svg><use href="#i-search" /></svg><p>Nothing matches that.</p></div>}
-        {groups.map(g => (
-          <div className="cat-g" key={g.group}>
-            <span className="lbl">{g.group}</span>
-            <div className="cat-grid">
-              {g.items.map(c => (
-                <button
-                  key={c.kind} className={`chip${place === c.kind ? ' on' : ''}`} data-kind={c.kind}
-                  title={`${c.name} — ${c.w}×${c.h} cm`}
-                  onClick={() => ed().patch({ place: place === c.kind ? null : c.kind, tool: 'select' })}
-                >
-                  <GlyphPreview kind={c.kind} w={76} h={52} />
-                  <b>{c.name}</b>
-                  <em>{c.w}×{c.h}</em>
-                </button>
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
-    </section>
   );
 }

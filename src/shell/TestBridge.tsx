@@ -24,7 +24,7 @@ export function TestBridge() {
       get tool() { return ed().tool; },
       get trayOpen() { return ed().trayOpen; },
       get draft() { return ed().draft; },
-      get simple() { return ed().simple; },
+      get rendersOpen() { return ed().rendersOpen; },
       get dirty() { return ed().dirty; },
       get grid() { return ed().grid; },
       get showRef() { return ed().showRef; },

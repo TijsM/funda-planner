@@ -67,6 +67,14 @@ export function axisLock(p: Pt, anchor: Pt): Pt {
 /* ── handles ────────────────────────────────────────────────────── */
 
 const CORNERS: [number, number][] = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
+/** Midpoints of the four sides, in the same clockwise-from-top-left order. A 0
+ *  means "leave this axis alone", which is the whole difference from a corner. */
+const SIDES: [number, number][] = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+
+/** Corners first: they are listed ahead of the sides so that on an object too
+ *  small to separate them, `hitHandle` returns the corner. Resizing one axis by
+ *  accident is a worse surprise than resizing two on purpose. */
+export const RESIZE_DIRS: readonly (readonly [number, number])[] = [...CORNERS, ...SIDES];
 
 /** Handles live in screen space so drawing and hit-testing cannot disagree. */
 export function handlesFor(sel: SelObj[], v: View): Handle[] {
@@ -75,10 +83,10 @@ export function handlesFor(sel: SelObj[], v: View): Handle[] {
   const out: Handle[] = [];
   if (s.t === 'item') {
     const o: Item = s.o;
-    CORNERS.forEach((c, i) => {
+    RESIZE_DIRS.forEach((c, i) => {
       const p = rotPt((c[0] * o.w) / 2, (c[1] * o.h) / 2, o.rot || 0);
       const sc = toScreen(v, o.x + p.x, o.y + p.y);
-      out.push({ k: 'res', i, sx: sc.x, sy: sc.y, o, t: 'item' });
+      out.push({ k: 'res', i, dir: c, sx: sc.x, sy: sc.y, o, t: 'item' });
     });
     const rp = rotPt(0, -o.h / 2 - 26 / v.zoom, o.rot || 0);
     const rs = toScreen(v, o.x + rp.x, o.y + rp.y);
@@ -100,6 +108,23 @@ export function handlesFor(sel: SelObj[], v: View): Handle[] {
 export function hitHandle(handles: Handle[], sp: Pt): Handle | null {
   for (const h of handles) if (Math.hypot(h.sx - sp.x, h.sy - sp.y) < 8) return h;
   return null;
+}
+
+/** The pointer over a handle, pointing the way the handle actually pulls. One
+ *  cursor for everything said "resize" but not along which axis, which is the
+ *  only thing a side handle has to communicate — and it lies outright on a
+ *  rotated object, where the top edge is not up. */
+export function cursorForHandle(h: Handle | null): string {
+  if (!h) return 'default';
+  if (h.k === 'rot') return 'grab';
+  if (h.k !== 'res' || !h.dir) return 'nwse-resize';
+  const p = rotPt(h.dir[0], h.dir[1], (h.o as Item).rot || 0);
+  /* half a turn is enough: a handle and the one opposite pull along one line */
+  const a = ((Math.atan2(p.y, p.x) * 180) / Math.PI + 360) % 180;
+  if (a < 22.5 || a >= 157.5) return 'ew-resize';
+  if (a < 67.5) return 'nwse-resize';
+  if (a < 112.5) return 'ns-resize';
+  return 'nesw-resize';
 }
 
 /** screen-space bounds of a selection, for placing the on-object toolbar */

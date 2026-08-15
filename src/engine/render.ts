@@ -496,6 +496,18 @@ export function paint(g: Ctx, input: PaintInput): void {
         g.fillStyle = PAPER; g.fill();
         g.strokeStyle = ACC; g.lineWidth = 1.8; g.stroke();
         g.beginPath(); g.arc(h.sx, h.sy, 2, 0, 6.2832); g.fillStyle = ACC; g.fill();
+      } else if (h.dir && !(h.dir[0] && h.dir[1])) {
+        /* A side handle: a short bar lying along its own edge, so it reads as
+           "this edge moves" rather than as a corner gone astray. It turns with
+           the object — drawn square to the screen it would cut across the edge
+           it belongs to the moment anything is rotated. */
+        const rot = ((h.o as { rot?: number }).rot || 0) * Math.PI / 180;
+        const along = h.dir[0] ? 0 : 1;                 // 0 = bar runs vertically
+        const bw = along ? 9 : 3.2, bh = along ? 3.2 : 9;
+        g.translate(h.sx, h.sy); g.rotate(rot);
+        g.rect(-bw, -bh, bw * 2, bh * 2);
+        g.fillStyle = PAPER; g.fill();
+        g.strokeStyle = ACC; g.lineWidth = 1.8; g.stroke();
       } else {
         const r = h.k === 'vtx' || h.k === 'end' ? 4.2 : 4;
         g.rect(h.sx - r, h.sy - r, r * 2, r * 2);

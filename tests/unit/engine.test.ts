@@ -6,7 +6,7 @@ import {
   newProject, parseFundaSource, parseProject, planFacts, pointInPoly, polyArea, polyCentroid,
   rotPt, serializeProject, setLabel, setDesc, descOf, labelOf, makeItem, newArea, bearing,
   shellBBox, snapAngle, snapPoint, axisLock,
-  fitTo, zoomAt, toScreen, toWorld, handlesFor, hitTest, resolveSel, placeOf,
+  fitTo, zoomAt, toScreen, toWorld, handlesFor, cursorForHandle, hitTest, resolveSel, placeOf,
 } from '@engine/index';
 import type { Fml } from '@engine/io/funda';
 import type { Item, Layers, View } from '@engine/types';
@@ -192,6 +192,62 @@ describe('hit testing', () => {
     const two = resolveSel(f, f.walls.slice(0, 2).map(w => ({ t: 'wall' as const, id: w.id })));
     expect(handlesFor(two, v)).toHaveLength(0);
   });
+
+  /* An item used to offer only its four corners, so either both dimensions
+     changed or neither did. */
+  const itemSel = (over: Partial<Item> = {}) => {
+    const p = blankProject('x', false);
+    const f = p.floors[0];
+    f.items.push({ id: 'i1', kind: 'chair', x: 400, y: 500, w: 200, h: 100, rot: 0, ...over } as Item);
+    return resolveSel(f, [{ t: 'item', id: 'i1' }]);
+  };
+
+  it('offers all four sides as well as the corners', () => {
+    const hs = handlesFor(itemSel(), v);
+    const res = hs.filter(h => h.k === 'res');
+    expect(res).toHaveLength(8);
+    expect(hs.filter(h => h.k === 'rot')).toHaveLength(1);
+    const corners = res.filter(h => h.dir![0] && h.dir![1]);
+    const sides = res.filter(h => !(h.dir![0] && h.dir![1]));
+    expect(corners).toHaveLength(4);
+    expect(sides).toHaveLength(4);
+    /* every side exactly once, and never the no-op direction */
+    expect(sides.map(h => h.dir!.join(',')).sort())
+      .toEqual(['-1,0', '0,-1', '0,1', '1,0']);
+  });
+
+  it('puts the corners first, so a small object still resizes both ways', () => {
+    const res = handlesFor(itemSel(), v).filter(h => h.k === 'res');
+    /* hitHandle returns the first within range; on an object only a few pixels
+       across the corner and side handles overlap, and the corner has to win */
+    expect(res.slice(0, 4).every(h => h.dir![0] && h.dir![1])).toBe(true);
+  });
+
+  it('sits each side handle on the middle of its edge', () => {
+    const hs = handlesFor(itemSel(), v).filter(h => h.k === 'res');
+    const right = hs.find(h => h.dir![0] === 1 && h.dir![1] === 0)!;
+    const c = toScreen(v, 400, 500);
+    /* 200 wide, so the right edge is 100 cm out and the handle is level with
+       the centre — no vertical offset at all */
+    expect(right.sx).toBeCloseTo(toScreen(v, 500, 500).x, 6);
+    expect(right.sy).toBeCloseTo(c.y, 6);
+  });
+
+  it('points the cursor along the axis the handle actually pulls', () => {
+    const hs = handlesFor(itemSel(), v).filter(h => h.k === 'res');
+    const dir = (x: number, y: number) => hs.find(h => h.dir![0] === x && h.dir![1] === y)!;
+    expect(cursorForHandle(dir(1, 0))).toBe('ew-resize');
+    expect(cursorForHandle(dir(0, 1))).toBe('ns-resize');
+    expect(cursorForHandle(dir(1, 1))).toBe('nwse-resize');
+    expect(cursorForHandle(dir(1, -1))).toBe('nesw-resize');
+    expect(cursorForHandle(null)).toBe('default');
+  });
+
+  it('turns the cursor with the object, because the top edge is not always up', () => {
+    const hs = handlesFor(itemSel({ rot: 90 }), v).filter(h => h.k === 'res');
+    const right = hs.find(h => h.dir![0] === 1 && h.dir![1] === 0)!;
+    expect(cursorForHandle(right)).toBe('ns-resize');
+  });
 });
 
 describe('catalogue', () => {
@@ -205,6 +261,35 @@ describe('catalogue', () => {
       expect(e.h, k).toBeGreaterThan(0);
       expect(e.name.length, k).toBeGreaterThan(1);
     }
+  });
+
+  /* The tray searches name, group and `alt`. A kitchen had no table in it at
+     all, and the one round table in the catalogue was called "Round 6p" over in
+     Dining — so the words a person actually types found nothing. */
+  const finds = (q: string) => CATALOG.flatMap(g => g.items.filter(i =>
+    [i.name, g.group, i.alt ?? ''].some(t => t.toLowerCase().includes(q.toLowerCase()))));
+
+  it('finds a round table by the words someone would type', () => {
+    for (const q of ['round table', 'ronde tafel', 'circular', 'keukentafel', 'bistro']) {
+      expect(finds(q).length, q).toBeGreaterThan(0);
+    }
+  });
+
+  /* The tray matches a contiguous substring, so "round table" only reaches an
+     entry whose name or alt has those two words next to each other — which is
+     why the 6-seater called "Round 6p" was invisible to the obvious query. */
+  it('finds every round table, not just the ones named like one', () => {
+    const kinds = finds('round table').map(i => i.kind);
+    expect(kinds).toContain('dtr');
+    expect(kinds).toContain('ktable');
+  });
+
+  it('has a round table you can put in a kitchen', () => {
+    const kitchen = CATALOG.find(g => g.group === 'Kitchen')!.items;
+    const round = kitchen.filter(i => /round/i.test(`${i.name} ${i.alt ?? ''}`));
+    expect(round.length).toBeGreaterThan(0);
+    /* square-on so the circle glyph is a circle, not an ellipse */
+    for (const t of round) expect(t.w, t.kind).toBe(t.h);
   });
 });
 

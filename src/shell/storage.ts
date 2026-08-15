@@ -9,7 +9,7 @@ import { ed } from '@state/store';
 export const LS_IDX = 'pgs.index.v2';
 export const LS_P = 'pgs.proj.v2.';
 export const LS_AUTO = 'pgs.auto.v2';
-export const LS_MODE = 'pgs.mode.v1';
+export const LS_RENDERS = 'pgs.rendersbar.v1';
 export const LS_COACH = 'pgs.coach.v1';
 
 export interface LibraryEntry {
@@ -103,11 +103,11 @@ export function readAutosave(): { p: Project; fi: number } | null {
   } catch { return null; }
 }
 
-export const readMode = () => {
-  try { return localStorage.getItem(LS_MODE) || 'simple'; } catch { return 'simple'; }
+export const readRendersBar = () => {
+  try { return localStorage.getItem(LS_RENDERS) === '1'; } catch { return false; }
 };
-export const writeMode = (simple: boolean) => {
-  try { localStorage.setItem(LS_MODE, simple ? 'simple' : 'pro'); } catch { /* ignore */ }
+export const writeRendersBar = (open: boolean) => {
+  try { localStorage.setItem(LS_RENDERS, open ? '1' : '0'); } catch { /* ignore */ }
 };
 export const coachSeen = () => {
   try { return !!localStorage.getItem(LS_COACH); } catch { return true; }

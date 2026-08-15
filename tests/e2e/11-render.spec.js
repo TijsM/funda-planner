@@ -270,3 +270,64 @@ test.describe('Generate is off when there is nothing to send', () => {
     await expect(page.locator('#aiGen')).toBeDisabled();
   });
 });
+
+test.describe('the renders sidebar', () => {
+  test('shows what was generated, without opening the render panel', async ({ page }) => {
+    await stubProvider(page);
+    await starter(page);
+    await openAI(page);
+    await page.locator('#aiGen').click();
+    await expect(toast(page, 'Render')).toBeVisible({ timeout: 20_000 });
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#ovAI')).toHaveCount(0);
+
+    /* the whole point: the render is reachable with the panel shut */
+    await expect(page.locator('#rbar')).toHaveCount(0);
+    await page.locator('#btnRenders').click();
+    await expect(page.locator('#rbar')).toBeVisible();
+    await expect(page.locator('#rbarList .rcell')).toHaveCount(1);
+    await expect(page.locator('#rbarCount')).toHaveText('1');
+  });
+
+  test('remembers whether it was open, and enlarges a render on click', async ({ page }) => {
+    await stubProvider(page);
+    await starter(page);
+    await openAI(page);
+    await page.locator('#aiGen').click();
+    await expect(toast(page, 'Render')).toBeVisible({ timeout: 20_000 });
+    await page.keyboard.press('Escape');
+    await page.locator('#btnRenders').click();
+    await expect(page.locator('#rbar')).toBeVisible();
+
+    await page.locator('#rbarList .rcell .rcell-img').first().click();
+    await expect(page.locator('#rbarBig img')).toBeVisible();
+    await page.locator('#rbarBig').click();
+    await expect(page.locator('#rbarBig')).toHaveCount(0);
+
+    /* the sidebar is chrome, not document — it survives a reload on its own */
+    await page.reload();
+    await page.waitForFunction(() => window.__S && window.__S.proj);
+    await expect(page.locator('#rbar')).toBeVisible();
+    await page.locator('#rbarClose').click();
+    await expect(page.locator('#rbar')).toHaveCount(0);
+    await page.reload();
+    await page.waitForFunction(() => window.__S && window.__S.proj);
+    await expect(page.locator('#rbar')).toHaveCount(0);
+  });
+
+  test('deleting from the sidebar takes it out of the filmstrip too', async ({ page }) => {
+    await stubProvider(page);
+    await starter(page);
+    await openAI(page);
+    await page.locator('#aiGen').click();
+    await expect(toast(page, 'Render')).toBeVisible({ timeout: 20_000 });
+    await page.keyboard.press('Escape');
+    await page.locator('#btnRenders').click();
+    await expect(page.locator('#rbarList .rcell')).toHaveCount(1);
+
+    await page.locator('#rbarList .rcell .cb.dgr').first().click();
+    await expect(page.locator('#rbarList .rcell')).toHaveCount(0);
+    await openAI(page);
+    await expect(page.locator('#aiStrip .ai-cell')).toHaveCount(0);
+  });
+});

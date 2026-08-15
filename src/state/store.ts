@@ -28,7 +28,8 @@ export interface EditorState {
   showRef: boolean;
   refOpacity: number;
   ghost: boolean;
-  simple: boolean;
+  /** the renders sidebar, remembered between sessions */
+  rendersOpen: boolean;
   draft: Draft | null;
   marquee: Marquee | null;
   snapHint: Pt | null;
@@ -81,7 +82,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   showRef: false,
   refOpacity: 0.45,
   ghost: false,
-  simple: true,
+  rendersOpen: false,
   draft: null,
   marquee: null,
   snapHint: null,

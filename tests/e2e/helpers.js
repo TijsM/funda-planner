@@ -99,7 +99,7 @@ export async function mockNetwork(page) {
 }
 
 export const S = page => page.evaluate(() => JSON.parse(JSON.stringify({
-  simple: window.__S.simple, fi: window.__S.fi, sel: window.__S.sel,
+  rendersOpen: window.__S.rendersOpen, fi: window.__S.fi, sel: window.__S.sel,
   place: window.__S.place, zoom: window.__S.zoom, px: window.__S.px, py: window.__S.py,
   dirty: window.__S.dirty,
   name: window.__S.proj && window.__S.proj.name,

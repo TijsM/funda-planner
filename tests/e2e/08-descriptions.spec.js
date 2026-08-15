@@ -16,7 +16,6 @@ const descs = page => page.evaluate(() => {
   };
 });
 
-const toPro = async page => { await page.locator('#mPro').click(); await page.waitForTimeout(400); };
 
 const openRender = async page => {
   await page.locator('#btnAI').click();
@@ -84,21 +83,30 @@ test.describe('a description on every object', () => {
     expect(a.d).toBe('wide oak floorboards, north light');
   });
 
-  test('the Pro inspector edits the same field', async ({ page }) => {
+  test('survives reselecting the object', async ({ page }) => {
     await starter(page);
     await addFromTray(page, 'sofa3', 380, 300);
     await page.locator('#ctxDesc').fill('from the toolbar');
     await page.waitForTimeout(150);
 
-    await toPro(page);
-    await expect(page.locator('#inDesc')).toHaveValue('from the toolbar');
-    await page.locator('#inDesc').fill('rewritten in the inspector');
-    await page.waitForTimeout(150);
-    expect((await descs(page)).items[0].d).toBe('rewritten in the inspector');
-
-    /* rooms have one as well */
-    await page.locator('#inspector').isVisible();
+    /* the description used to have a second home in the Pro inspector; with one
+       field left, what matters is that it is still there when you come back */
+    /* the first Escape only blurs the field it was typed in — the document
+       handler ignores keys aimed at an input, which is what protects typing */
     await page.keyboard.press('Escape');
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#ctx')).toBeHidden();
+    /* addFromTray aims in screen pixels, clickObject in world centimetres — ask
+       the document where the sofa actually landed rather than reusing 380,300 */
+    const at = await page.evaluate(() => {
+      const i = window.__S.proj.floors[0].items[0];
+      return { x: i.x, y: i.y };
+    });
+    await clickObject(page, at.x, at.y);
+    await expect(page.locator('#ctxDesc')).toHaveValue('from the toolbar');
+    await page.locator('#ctxDesc').fill('rewritten on the object');
+    await page.waitForTimeout(150);
+    expect((await descs(page)).items[0].d).toBe('rewritten on the object');
   });
 
   test('reaches the render prompt, on the object and on the room', async ({ page }) => {
@@ -106,8 +114,7 @@ test.describe('a description on every object', () => {
     await page.locator('#fchips .fchip').nth(1).click();
     await page.waitForTimeout(250);
 
-    /* describe a room through the inspector, which is addressable by name */
-    await toPro(page);
+    /* describe a room through the selection toolbar */
     const woon = await page.evaluate(() => {
       const a = window.__S.proj.floors[1].areas.find(x => x.name === 'Woonkamer');
       const c = a.poly.reduce((s, p) => ({ x: s.x + p.x / a.poly.length, y: s.y + p.y / a.poly.length }), { x: 0, y: 0 });
@@ -115,11 +122,8 @@ test.describe('a description on every object', () => {
       return c;
     });
     await page.waitForTimeout(200);
-    await page.locator('#inAreaDesc').fill('plastered walls, low winter light');
+    await page.locator('#ctxDesc').fill('plastered walls, low winter light');
     await page.waitForTimeout(150);
-
-    await page.locator('#mSimple').click();
-    await page.waitForTimeout(400);
     await addFromTray(page, 'sofa3', 0, 0);              // lands, then we move it in
     await page.evaluate(c => {
       const f = window.__S.proj.floors[1];

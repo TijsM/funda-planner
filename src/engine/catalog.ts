@@ -142,9 +142,9 @@ const RAW: [string, [string, string, number, number, Glyph, string?][]][] = [
     ['sofaL',   'L-shaped sofa', 265, 200, (g, w, h) => G.lseat(g, w, h), 'corner sectional l-shape lounge hoekbank'],
     ['sofaChaise', 'Sofa with chaise', 260, 160, (g, w, h) => G.lseat(g, w, h, 88, 1), 'l-shape chaise longue divan daybed lounge'],
     ['armchair','Armchair',     88,  88, (g, w, h) => G.seat(g, w, h, 1, 1), 'fauteuil easy chair'],
-    ['pouf',    'Pouf',         55,  55, (g, w) => G.round(g, w)],
+    ['pouf',    'Pouf',         55,  55, (g, w) => G.round(g, w), 'round circular ottoman footstool poef'],
     ['coffee',  'Coffee table',110,  60, G.table],
-    ['sidetbl', 'Side table',   50,  50, (g, w) => G.round(g, w)],
+    ['sidetbl', 'Side table',   50,  50, (g, w) => G.round(g, w), 'round circular bijzettafel rond'],
     ['tvstand', 'TV unit',     170,  42, (g, w, h) => G.cabinet(g, w, h)],
     ['tv',      'TV',          120,  10, (g, w, h) => { box(g, w, h, 1); g.save(); g.globalAlpha = .4; rr(g, -w * .12, h / 2, w * .24, 6, 1); g.fill(); g.restore(); }],
     ['shelf',   'Bookshelf',    90,  32, (g, w, h) => { box(g, w, h, 1); g.save(); g.globalAlpha = .35; for (let i = 1; i < 4; i++) ln(g, -w / 2 + i * w / 4, -h / 2, -w / 2 + i * w / 4, h / 2); g.restore(); }],
@@ -157,9 +157,11 @@ const RAW: [string, [string, string, number, number, Glyph, string?][]][] = [
     ['dt4',   'Table 4p',  120,  80, (g, w, h) => { G.chairs(g, w, h, 1, 'lr'); G.chairs(g, w, h, 1); G.table(g, w, h); }],
     ['dt6',   'Table 6p',  180,  90, (g, w, h) => { G.chairs(g, w, h, 2); G.chairs(g, w, h, 1, 'lr'); G.table(g, w, h); }],
     ['dt8',   'Table 8p',  220, 100, (g, w, h) => { G.chairs(g, w, h, 3); G.chairs(g, w, h, 1, 'lr'); G.table(g, w, h); }],
-    ['dtr',   'Round 6p',  130, 130, (g, w, h) => { G.chairs(g, w * .74, h * .74, 3); G.chairs(g, w * .74, h * .74, 1, 'lr'); G.round(g, w); }],
+    /* "Round 6p" is the only word here a search for "round table" can match, and
+       nobody types the name of a thing they are still looking for. */
+    ['dtr',   'Round 6p',  130, 130, (g, w, h) => { G.chairs(g, w * .74, h * .74, 3); G.chairs(g, w * .74, h * .74, 1, 'lr'); G.round(g, w); }, 'round table circular ronde tafel eettafel dining'],
     ['chair', 'Chair',      46,  48, (g, w, h) => { box(g, w, h, 3); g.save(); g.globalAlpha = .45; rr(g, -w / 2, -h / 2, w, 8, 2); g.fill(); g.restore(); }],
-    ['stool', 'Bar stool',  38,  38, (g, w) => G.round(g, w)],
+    ['stool', 'Bar stool',  38,  38, (g, w) => G.round(g, w), 'round circular barkruk kruk'],
     ['sideb', 'Sideboard', 180,  45, (g, w, h) => G.cabinet(g, w, h, 3)],
     ['bar',   'Bar / island',200, 60, (g, w, h) => { box(g, w, h, 1.5); g.save(); g.globalAlpha = .3; rr(g, -w / 2, h / 2 - 12, w, 12, 1); g.fill(); g.restore(); }],
   ]],
@@ -190,6 +192,11 @@ const RAW: [string, [string, string, number, number, Glyph, string?][]][] = [
     ['dishw',  'Dishwasher',   62,  62, (g, w, h) => { box(g, w, h, 2); g.save(); g.globalAlpha = .35; rr(g, -w / 2 + 5, -h / 2 + 5, w - 10, h - 10, 2); g.stroke(); g.restore(); }],
     ['hood',   'Extractor',    92,  50, (g, w, h) => { g.save(); g.setLineDash([7, 5]); box(g, w, h, 2); g.restore(); }],
     ['pantry', 'Tall cabinet', 62,  62, (g, w, h) => { G.cabinet(g, w, h, 1); g.save(); g.globalAlpha = .3; ln(g, -w / 2, -h / 2, w / 2, h / 2); ln(g, w / 2, -h / 2, -w / 2, h / 2); g.restore(); }],
+    /* A kitchen that is eaten in needs a table, and the group had none at all —
+       so the only round one in the catalogue was the 6-seater over in Dining,
+       which is not what anyone means by a kitchen table. */
+    ['ktable', 'Round table 4p', 100, 100, (g, w, h) => { G.chairs(g, w * .72, h * .72, 1); G.chairs(g, w * .72, h * .72, 1, 'lr'); G.round(g, w); }, 'round circular breakfast bistro kitchen table ronde tafel keukentafel eethoek'],
+    ['ktable2', 'Round table 2p', 70,  70, (g, w, h) => { G.chairs(g, w * .7, h * .7, 1, 'lr'); G.round(g, w); }, 'round circular bistro cafe small breakfast ronde tafel keukentafel'],
   ]],
   ['Bathroom', [
     ['toilet',  'Toilet',      40,  68, (g, w, h) => { rr(g, -w / 2, -h / 2, w, h * .3, 2); g.fill(); g.stroke(); g.beginPath(); g.ellipse(0, h * .12, w / 2, h * .33, 0, 0, 6.2832); g.fill(); g.stroke(); }],

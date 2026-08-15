@@ -4,13 +4,18 @@ import { fresh, S, floorOf, importMocked, starter, addFromTray, clickPlan, dragP
 test.beforeEach(async ({ page }) => { await fresh(page); });
 
 test.describe('the meeting shell', () => {
-  test('hides every pro surface and shows all floors as chips', async ({ page }) => {
+  test('carries no side panels and shows all floors as chips', async ({ page }) => {
     await importMocked(page);
-    await expect(page.locator('.toolrail')).toBeHidden();
-    await expect(page.locator('.panel.left')).toBeHidden();
-    await expect(page.locator('.panel.right')).toBeHidden();
-    await expect(page.locator('.statusbar')).toBeHidden();
     await expect(page.locator('#floorbar')).toBeVisible();
+    /* v2 deleted the panels; the shipped build merely hides them in Simple */
+    if (process.env.E2E_TARGET === 'next') {
+      await expect(page.locator('.panel')).toHaveCount(0);
+      await expect(page.locator('.statusbar')).toHaveCount(0);
+    } else {
+      await expect(page.locator('.panel.left')).toBeHidden();
+      await expect(page.locator('.panel.right')).toBeHidden();
+      await expect(page.locator('.statusbar')).toBeHidden();
+    }
 
     const chips = page.locator('#fchips .fchip');
     await expect(chips).toHaveCount(5);
@@ -257,7 +262,6 @@ test.describe('placing and editing without ever leaving the canvas', () => {
 
     await addFromTray(page, 'draw:measure', 700, 600);
     expect((await floorOf(page)).dims).toBe(1);
-    expect((await S(page)).simple).toBe(true);
     // measuring turns the dimension layer back on by itself
     expect(await page.evaluate(() => !!window.__S.view.dims)).toBe(true);
     await expect(page.locator('#ctx')).toContainText(/m|cm/);
