@@ -545,15 +545,56 @@ textarea.src:focus{border-color:var(--vermilion)}
 .ctx-desc input::placeholder{color:var(--tx-3)}
 
 /* ---------- image-generator export ---------- */
-.modal.ai{max-width:1000px}
-.ai-b{display:grid;grid-template-columns:1fr 340px;gap:20px;align-items:start}
-.ai-left{min-width:0}
+.modal.ai{max-width:1060px}
+/* stretch, not start: the right column is the taller one now, and the prompt
+   grows into the space instead of leaving a hole under it */
+.ai-b{display:grid;grid-template-columns:1fr 380px;gap:20px;align-items:stretch}
+.ai-left{min-width:0;display:flex;flex-direction:column}
+.ai-left textarea{flex:1}
 .ai-right{min-width:0;display:flex;flex-direction:column;gap:8px}
 .ai-prev{
   border:1px solid var(--line-hi);border-radius:6px;overflow:hidden;background:var(--paper);
-  display:grid;place-items:center;min-height:200px;
+  display:grid;place-items:center;min-height:200px;position:relative;
 }
-.ai-prev img{width:100%;height:auto;display:block}
+.ai-prev img{width:100%;height:auto;display:block;grid-area:1/1}
+/* the reference stays mounted behind a selected render — #aiImg is what the
+   suite measures naturalWidth on, and an unmounted image has none */
+.ai-prev img.off{display:none}
+/* the running job, over the picture it is about to replace */
+.ai-run{
+  grid-area:1/1;align-self:stretch;display:flex;flex-direction:column;justify-content:center;
+  gap:5px;padding:14px 16px;text-align:center;background:#141210E0;backdrop-filter:blur(2px);
+}
+.ai-run b{font:600 22px/1 var(--mono);color:var(--vermilion);font-variant-numeric:tabular-nums}
+.ai-run span{font:400 11.5px/1.4 var(--sans);color:var(--tx)}
+.ai-run em{font:400 10px/1.45 var(--sans);font-style:normal;color:var(--tx-3)}
+.ai-meta{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.ai-meta .mono{font:400 9.5px/1 var(--mono);color:var(--tx-3)}
+.hint.err{color:#FF9C96}
+/* filmstrip — flat and reverse-chronological on purpose; one floor at a time
+   never grows the depth that would justify a tree */
+.ai-strip{
+  display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:7px;
+  max-height:186px;overflow-y:auto;padding-right:2px;
+}
+.ai-cell{
+  position:relative;display:grid;place-items:center;min-height:64px;padding:4px;
+  border:1px solid var(--line);border-radius:5px;background:var(--sunken);overflow:hidden;
+  transition:.13s;
+}
+.ai-cell:hover{border-color:var(--line-hi);transform:translateY(-1px)}
+.ai-cell.on{border-color:var(--vermilion);box-shadow:0 0 0 1px #E4632C55}
+.ai-cell img{width:100%;height:auto;display:block;border-radius:3px}
+.ai-cell.bad{background:#D14B4514;border-color:#D14B455C;min-height:64px}
+.ai-cell.bad svg{width:17px;height:17px;color:var(--danger)}
+.ai-cell b{position:absolute;top:3px;left:4px;font:600 8.5px/1 var(--mono);color:var(--tx);text-shadow:0 0 4px #000}
+.ai-cell em{position:absolute;top:3px;right:4px;font:400 8px/1 var(--mono);font-style:normal;color:var(--tx-2);text-shadow:0 0 4px #000}
+.ai-cell u{
+  position:absolute;left:0;right:0;bottom:0;padding:2px 4px;text-decoration:none;
+  font:400 8px/1.2 var(--mono);color:var(--tx-2);background:#141210CC;text-align:left;
+}
+.ai-unlink{font:400 10.5px/1.5 var(--sans);color:var(--tx-2);text-decoration:underline}
+.ai-unlink:hover{color:var(--tx)}
 .seg{display:inline-flex;border:1px solid var(--line-hi);border-radius:5px;overflow:hidden;flex:1}
 .seg button{
   flex:1;height:27px;padding:0 10px;font:500 11px/1 var(--sans);color:var(--tx-3);
@@ -567,7 +608,7 @@ textarea.src:focus{border-color:var(--vermilion)}
   border:none;outline:none;height:100%;cursor:pointer;
 }
 .fld select option{background:#221E19;color:var(--tx)}
-#aiPrompt{height:250px;line-height:1.55;color:var(--tx)}
+#aiPrompt{min-height:250px;line-height:1.55;color:var(--tx)}
 @media (max-width:900px){.ai-b{grid-template-columns:1fr}}
 
 /* first-run coach marks */

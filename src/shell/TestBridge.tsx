@@ -2,8 +2,11 @@
 
 import { useEffect } from 'react';
 import { ed } from '@state/store';
+import { rs } from '@state/renders';
 import { contentBBox } from '@engine/model';
 import { paint } from '@engine/render';
+import { deleteDatabase } from './renders';
+import { refreshRenders } from './jobs';
 
 /** Exposes the store under the name the browser suite already drives, so the
  *  68 end-to-end tests validate this port instead of being rewritten alongside
@@ -45,6 +48,18 @@ export function TestBridge() {
     w.__setPlace = (k: string | null) => ed().patch({ place: k });
     w.__setSel = (s: { t: string; id: string }[]) => ed().setSel(s as never);
     w.__ed = ed;
+    /* The render workspace is a second store on purpose (Canvas.tsx:72 repaints
+       on every editor set(), and a job ticks once a second), which puts it out
+       of reach of __ed — so it gets its own handle rather than being invisible
+       to the suite. */
+    w.__renders = rs;
+    /* IndexedDB survives between Playwright tests and between whole runs, so
+       fresh() needs a way to wipe it that does not depend on the modal. */
+    w.__wipeRenders = async () => {
+      await deleteDatabase();
+      rs().patch({ renders: [], selectedId: null, parentId: null });
+      await refreshRenders();
+    };
   }, []);
   return null;
 }

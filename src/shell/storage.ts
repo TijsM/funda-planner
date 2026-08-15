@@ -59,13 +59,26 @@ export function loadProject(id: string): Project | null {
   } catch { return null; }
 }
 
+/* Deleting the plan has to take its renders with it. They are keyed by project
+   id and the filmstrip only ever asks for the open project's, so a render left
+   behind is unreachable from the UI for good — while still occupying the quota
+   and still counted in "every render on this browser". Best-effort and not
+   awaited: the plan is gone either way, and a failed cleanup must not stop it. */
+function forgetRenders(id: string) {
+  void import('./renders').then(m => m.deleteRendersForProject(id)).catch(() => { /* ignore */ });
+}
+
 export function deleteProject(id: string) {
   try { localStorage.removeItem(LS_P + id); } catch { /* ignore */ }
   writeIndex(readIndex().filter(x => x.id !== id));
+  forgetRenders(id);
 }
 
 export function clearLibrary() {
-  readIndex().forEach(x => { try { localStorage.removeItem(LS_P + x.id); } catch { /* ignore */ } });
+  readIndex().forEach(x => {
+    try { localStorage.removeItem(LS_P + x.id); } catch { /* ignore */ }
+    forgetRenders(x.id);
+  });
   writeIndex([]);
 }
 

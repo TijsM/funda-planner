@@ -22,6 +22,12 @@ jobs:
   e2e:
     name: browser tests (shipped build)
     runs-on: ubuntu-latest
+    # the password gate reads these at request time, so without them every spec
+    # boots into the login screen. Only on this job — `pnpm build` in `engine`
+    # must keep passing with no secrets at all.
+    env:
+      APP_LOGIN: ci-dummy-password
+      SESSION_SECRET: ci-dummy-session-secret-not-used-anywhere-real
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4

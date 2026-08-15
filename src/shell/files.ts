@@ -9,7 +9,10 @@ import { ed } from '@state/store';
 /** Browser file plumbing: downloads, file reads, and rendering the canvas to a
  *  bitmap. The drawing itself is the engine's paint(); only the plumbing is here. */
 
-function download(blob: Blob, filename: string) {
+/** Hands bytes to the browser as a file. Exported because the render workspace
+ *  needs the same three lines for every stored PNG, and a third copy of them is
+ *  a third place for the revoke to be forgotten. */
+export function download(blob: Blob, filename: string) {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = filename;

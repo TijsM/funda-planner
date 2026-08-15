@@ -1,8 +1,21 @@
 import { defineConfig, devices } from '@playwright/test';
+import fs from 'node:fs';
+import path from 'node:path';
 
 /* Drives the app in a real Chrome. During the v2 refactor this still points at
    the shipped single-file build; it moves to the Vite dev server once the React
    shell lands, without the specs changing. */
+
+/* `next dev` reads .env itself, but this process does not — and helpers.js signs
+   the session cookie with SESSION_SECRET, so without it every spec boots into
+   the login screen. No dotenv is installed and this needs no features: an
+   already-set variable always wins, because CI passes both as job env and has
+   no .env file at all. */
+const envFile = path.join(__dirname, '.env');
+for (const line of fs.existsSync(envFile) ? fs.readFileSync(envFile, 'utf8').split('\n') : []) {
+  const m = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
+  if (m && process.env[m[1]] === undefined) process.env[m[1]] = m[2].trim().replace(/^(['"])(.*)\1$/, '$2');
+}
 export default defineConfig({
   testDir: './tests/e2e',
   fullyParallel: true,

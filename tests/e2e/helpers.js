@@ -1,6 +1,7 @@
 import { expect } from '@playwright/test';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'node:crypto';
 
 /* __dirname, not import.meta: the root package is CJS, and Playwright
    transpiles import syntax but leaves import.meta alone. */
@@ -8,6 +9,20 @@ const here = __dirname;
 export const FIXTURES = path.join(here, '..', 'fixtures');
 export const APP = process.env.E2E_TARGET === 'next' ? '/' : '/index.html';
 export const FUNDA_URL = 'https://www.funda.nl/detail/koop/rosmalen/huis-pieter-kleijnstraat-19/44432123/';
+
+/* The origin the gate protects. The legacy target is a static file server with
+   no gate at all, so the cookie is only minted for the ported app. */
+export const ORIGIN = 'http://localhost:3500';
+
+/** Mints the same token `src/server/session.ts` signs — base64url(json) plus an
+ *  HMAC-SHA256 over it. Duplicated rather than imported because helpers.js is
+ *  transpiled JS and session.ts opens with `import 'server-only'`; if the scheme
+ *  ever changes, the 68 specs that predate the gate go red in one go and say so. */
+export function sessionToken(secret = process.env.SESSION_SECRET) {
+  if (!secret) return null;
+  const payload = Buffer.from(JSON.stringify({ iat: Date.now() })).toString('base64url');
+  return `${payload}.${crypto.createHmac('sha256', secret).update(payload).digest('base64url')}`;
+}
 
 /* ── a clean, deterministic app on every test ──────────────────── */
 export async function fresh(page, opts = {}) {
@@ -36,11 +51,26 @@ export async function fresh(page, opts = {}) {
     try {
       if (!sessionStorage.getItem('__pw_cleared')) {
         localStorage.clear();
+        /* Renders live in IndexedDB, which survives between tests AND between
+           whole runs — one leftover render makes every filmstrip assertion
+           depend on what ran yesterday. Queued here, before any app code opens
+           the database, so the open waits behind the delete. The name is
+           `IDB_NAME` in src/shell/renders.ts; this file cannot import it. */
+        indexedDB.deleteDatabase('pgs.renders.v1');
         sessionStorage.setItem('__pw_cleared', '1');
       }
       localStorage.setItem('pgs.coach.v1', '1');   // never show the coach mark in tests
     } catch (e) { }
   });
+
+  /* Walk in past the password gate. Without it every spec written before the
+     gate existed lands on /login instead of the app. `auth: false` is how the
+     gate's own specs ask to stay outside. */
+  if (opts.auth !== false && process.env.E2E_TARGET === 'next') {
+    const token = sessionToken();
+    if (token) await page.context().addCookies([{ name: 'session', value: token, url: ORIGIN }]);
+  }
+
   if (opts.mock !== false) await mockNetwork(page);
   return errors;
 }
