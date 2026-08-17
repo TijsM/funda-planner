@@ -35,7 +35,18 @@ function phrase(step: Step, code: string | undefined, message: string): string {
     case 'email_address_invalid':
       return 'That address was refused. Check it for a typo — some throwaway and example domains are rejected outright.';
     case 'email_address_not_authorized':
-      return 'This deployment cannot send to that address yet. Its mail is still going through Supabase\'s built-in sender, which only delivers to the project\'s own team.';
+      return 'The mail server refused to send to that address. It will only deliver to a domain it has been set up to send from.';
+    /* The mail server rejected the message and Supabase reports the whole class
+       as one opaque code — "Error sending confirmation email", with the real
+       reason only in the project's auth log. It is nearly always a sending
+       domain that has not been verified with the provider, which refuses every
+       recipient except the account holder's own address. Worth naming, because
+       from the outside it is indistinguishable from the app being broken and
+       nobody would think to go and read an SMTP log. */
+    case 'unexpected_failure':
+      return step === 'email'
+        ? 'The code could not be sent — the mail server rejected it. This is a setup problem on our side, not something you did: the sending domain most likely still needs verifying with the mail provider.'
+        : message;
     case 'over_email_send_rate_limit':
       return 'Too many codes have been sent from this deployment in the last hour. Wait, and if this keeps happening the mail server needs its own SMTP credentials.';
     case 'over_request_rate_limit':
