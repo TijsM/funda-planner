@@ -11,7 +11,8 @@
     "test:e2e": "playwright test",
     "verify:supabase": "node scripts/verify-supabase.mjs",
     "test:e2e:gate": "E2E_GATE=1 playwright test",
-    "test:e2e:live": "E2E_LIVE=1 playwright test"
+    "test:e2e:live": "E2E_LIVE=1 playwright test",
+    "signin:code": "node scripts/signin-code.mjs"
   },
   "packageManager": "pnpm@10.18.0",
   "dependencies": {

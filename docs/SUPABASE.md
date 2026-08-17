@@ -112,7 +112,7 @@ arrives, and it contains a link and no code. Nothing errors. There is no way in.
 
 > **The template cannot be edited on the free tier while the built-in sender is in use.** The
 > management API answers *"Email template modification is not available for free tier projects using
-> the default email provider."* So this step and step 5 are one step: configure SMTP first, and the
+> the default email provider."* So this step and step 5 are one step: **do step 5 first**, and the
 > templates unlock. There is no order in which you get working OTP mail without doing both.
 
 Also set the code length to six, or the mail carries eight digits while the form says six —
@@ -157,11 +157,35 @@ off a docs page:
 With an emailed code as the *only* way in, that is the whole product's front door. Configure your
 own before anyone else touches the deployment: **Authentication → Emails → SMTP Settings** (older
 dashboards: **Project Settings → Auth → SMTP**). Any transactional provider does — Resend, Postmark,
-SES, Mailgun. Use a sending domain with SPF and DKIM set up, or the codes land in spam and it looks
-exactly like the template mistake from step 4.
+SES, Mailgun.
+
+Resend, which is what this project uses:
+
+| field | value |
+|---|---|
+| Host | `smtp.resend.com` |
+| Port | `465` |
+| Username | `resend` |
+| Password | the `re_…` API key |
+| Sender | an address on a **verified** domain |
+
+A send-only API key is enough — it never needs to read anything.
+
+> **Verify your domain, or almost nobody can sign in.** Until a domain is verified in the provider,
+> Resend accepts only `onboarding@resend.dev` as the sender and delivers only to the address that
+> owns the Resend account. Everyone else's code is refused at the provider, which the login screen
+> reports honestly and which looks nothing like a configuration problem to the person reading it.
+> Open signup plus an unverified domain is a sign-up form that cannot admit anyone new. Add the
+> domain, paste its DKIM and SPF records into DNS, then change the sender to something like
+> `noreply@yourdomain`.
 
 Then raise **Authentication → Rate Limits → Emails sent per hour** off 2, which the built-in cap
-left it at.
+left it at — the API refuses that change until SMTP exists, with
+*"Custom SMTP required to configure … RATE_LIMIT_EMAIL_SENT"*.
+
+Two more knobs worth setting while you are here: **Email OTP Length** to 6 (it defaults to 8, and
+the login screen says six), and the per-address minimum gap (`smtp_max_frequency`, 60 s by default)
+down to something that does not make a mistyped address a one-minute penalty.
 
 ## 6. Auth settings worth a look
 

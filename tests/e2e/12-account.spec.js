@@ -16,13 +16,12 @@ import { createClient } from '@supabase/supabase-js';
  *  actually creates the session — runs for real against the live project.
  *
  *  One leg is stubbed and only one: the POST that asks Supabase to *send* the
- *  mail. Three reasons, all of them properties of the mailer rather than of this
- *  app. Supabase rejects `@example.com` outright as an invalid address, so a
- *  throwaway address cannot be used; the built-in sender delivers only to the
- *  project's own team, so a real address belonging to someone else cannot be
- *  used either; and it is capped at two messages an hour, so a suite that really
- *  sent would be rate-limited by its third run. Stubbing it keeps the assertions
- *  about our code and leaves nothing in anyone's inbox.
+ *  mail. Two reasons, both properties of the mailer rather than of this app.
+ *  Supabase rejects `@example.com` outright as an invalid address, so the
+ *  obvious throwaway domain is unavailable; and the provider only accepts
+ *  recipients it has a verified sending domain for, which a `+stamp` address
+ *  invented per run is not. Stubbing keeps the assertions about our code and
+ *  leaves nothing in anyone's inbox.
  *
  *  So this does NOT prove an email arrives. That is SMTP's job — step 5 of
  *  docs/SUPABASE.md — and no automated test here can stand in for sending one to
