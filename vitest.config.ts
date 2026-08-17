@@ -11,6 +11,8 @@ export default defineConfig({
       '@engine': dir('./src/engine'),
       '@shell': dir('./src/shell'),
       '@state': dir('./src/state'),
+      '@data': dir('./src/data'),
+      '@server': dir('./src/server'),
       /* `server-only` resolves to a module whose only job is to throw, unless the
          bundler applies React's `react-server` export condition — which Vitest
          does not. Importing the BFL adapter to test its status mapping is a hard

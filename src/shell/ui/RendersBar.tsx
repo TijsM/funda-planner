@@ -4,8 +4,10 @@ import { useEffect, useMemo, useState } from 'react';
 import { ed, useEditor } from '@state/store';
 import { rs, useRenders } from '@state/renders';
 import { slug } from '@engine/io/serialize';
+import { isCloud } from '@data/config';
+import { RESIGN_EVERY_MS } from '@data/cloudRenders';
 import { download } from '../files';
-import { deleteRender, type RenderRecord } from '../renders';
+import { deleteRender, renderBlob, succeeded, type RenderRecord } from '../renders';
 import { refreshRenders } from '../jobs';
 import { writeRendersBar } from '../storage';
 import { Icon } from './Icons';
@@ -32,6 +34,17 @@ export function RendersBar() {
   /* The panel owns no data of its own, so it has to ask — a render made on
      another floor, or before this one was opened, is only in IndexedDB. */
   useEffect(() => { if (open) void refreshRenders(); }, [open, project?.id, floor?.id]);
+
+  /* Cloud only, and the one thing here that is not event-driven: the thumbnails
+     are signed URLs with an hour on them, and this sidebar is meant to be left
+     open beside the plan all day. Local mode draws Blobs that never expire, so a
+     timer there would be a re-read of IndexedDB for nothing. */
+  useEffect(() => {
+    if (!open || !isCloud()) return;
+    const t = setInterval(() => { void refreshRenders(); }, RESIGN_EVERY_MS);
+    return () => clearInterval(t);
+  }, [open]);
+
   useEffect(() => { releaseAllBut(renders); }, [renders]);
 
   /* A record deleted from the Render panel must not stay on screen here. */
@@ -46,9 +59,16 @@ export function RendersBar() {
     return i < 0 ? null : renders.length - i;
   };
 
-  const save = (rec: RenderRecord) => {
-    if (!rec.blob || !project || !floor) return;
-    download(rec.blob, `${slug(`${project.name}-${floor.name}`)}-render-${numberOf(rec.id) ?? 1}-seed${rec.seed ?? 0}.png`);
+  /* Async because in cloud mode the bytes are behind a signed URL rather than in
+     the record — see `renderBlob`. Local mode still resolves without a request. */
+  const save = async (rec: RenderRecord) => {
+    if (!project || !floor) return;
+    const blob = await renderBlob(rec);
+    if (!blob) {
+      ed().toast('That render could not be fetched for download — reopen the panel and try again.', 'err');
+      return;
+    }
+    download(blob, `${slug(`${project.name}-${floor.name}`)}-render-${numberOf(rec.id) ?? 1}-seed${rec.seed ?? 0}.png`);
   };
 
   const remove = async (rec: RenderRecord) => {
@@ -85,21 +105,22 @@ export function RendersBar() {
         {renders.map(r => {
           const n = numberOf(r.id);
           const from = numberOf(r.parentId);
+          const ok = succeeded(r);
           return (
-            <div key={r.id} className={`rcell${r.id === selectedId ? ' on' : ''}${r.blob ? '' : ' bad'}`} data-id={r.id}>
+            <div key={r.id} className={`rcell${r.id === selectedId ? ' on' : ''}${ok ? '' : ' bad'}`} data-id={r.id}>
               <button
                 className="rcell-img" title={r.error ?? `Render #${n}, seed ${r.seed ?? 'unknown'} — click to enlarge`}
-                onClick={() => { rs().patch({ selectedId: r.id }); if (r.blob) setBig(r); }}
+                onClick={() => { rs().patch({ selectedId: r.id }); if (ok) setBig(r); }}
               >
-                {r.blob ? <img src={urlFor(r)} alt={`render ${n}`} /> : <Icon id="i-alert" />}
+                {ok ? <img src={urlFor(r)} alt={`render ${n}`} /> : <Icon id="i-alert" />}
               </button>
               <div className="rcell-f">
                 <b>#{n}</b>
                 <em>{r.seed ?? '—'}</em>
                 {from !== null && <u>from #{from}</u>}
                 <div className="spring" />
-                {r.blob && (
-                  <button className="cb" title="Download this render" onClick={() => save(r)}><Icon id="i-dl" /></button>
+                {ok && (
+                  <button className="cb" title="Download this render" onClick={() => void save(r)}><Icon id="i-dl" /></button>
                 )}
                 <button className="cb dgr" title="Delete this render" onClick={() => void remove(r)}><Icon id="i-trash" /></button>
               </div>
@@ -110,8 +131,11 @@ export function RendersBar() {
       </div>
 
       {/* Full size, over the whole window — a 290px column cannot show a render
-          at anything like the size it was generated at. */}
-      {big?.blob && (
+          at anything like the size it was generated at. `big` is only ever set
+          from a cell that succeeded, which is why there is no second test here:
+          a cloud render has no blob to test and testing one marked every render
+          in the account as having nothing to show. */}
+      {big && (
         <div className="ov open" id="rbarBig" onMouseDown={() => setBig(null)}>
           <img src={fullUrlFor(big)} alt={`render ${numberOf(big.id)}`} />
         </div>

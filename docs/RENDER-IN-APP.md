@@ -14,8 +14,16 @@ Decisions already made (do not relitigate):
 | Storage | IndexedDB, keyed by project + floor. No bucket, no database. |
 | Access | One password from `APP_LOGIN`, server-checked. Single user. |
 
-Both env vars are already set in `.env` (gitignored, untracked). Neither may ever be prefixed
-`NEXT_PUBLIC_` or reach the client bundle.
+`FLUX_API_KEY` is set in `.env` (gitignored, untracked) and may never be prefixed `NEXT_PUBLIC_`
+or reach the client bundle.
+
+> **Superseded on the storage and access rows.** This spec is kept as the record of what was built
+> and why, but accounts have since landed: sign-in is Supabase email OTP, render metadata is a
+> `renders` table and the PNGs live in a private Storage bucket. `APP_LOGIN` and `SESSION_SECRET`
+> no longer exist. IndexedDB survives as the local-mode store — the app still runs with no Supabase
+> credentials at all, which is exactly the configuration everything below describes. See
+> [`SUPABASE.md`](SUPABASE.md) for what replaced these two rows, and Task 2 below for the gate that
+> was removed.
 
 ---
 

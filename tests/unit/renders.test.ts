@@ -8,13 +8,15 @@ import { Blob as NodeBlob } from 'node:buffer';
 (globalThis as unknown as { Blob: unknown }).Blob = NodeBlob;
 
 import 'fake-indexeddb/auto';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   IDB_NAME, deleteDatabase, deleteRender, deleteRendersForProject, getRender, listRenders,
-  pngFromBase64, putRender, totalBytes, type RenderRecord, type RenderSettings,
+  pngFromBase64, putRender, renderBlob, succeeded, totalBytes,
+  type RenderRecord, type RenderSettings,
 } from '@shell/renders';
 
-/* No network, no fetch, no timers: the store is IndexedDB and nothing else. */
+/* No network, no fetch, no timers: the store is IndexedDB and nothing else —
+   except in the last block, where fetching a signed URL is the subject. */
 
 const SETTINGS: RenderSettings = {
   view: 'top', room: '*', style: 'warm oak', furniture: true,
@@ -156,6 +158,101 @@ describe('the render store', () => {
     expect(await totalBytes()).toBe(1700);
     await deleteRender('a');
     expect(await totalBytes()).toBe(500);
+  });
+});
+
+/* ── the cloud-shaped record ─────────────────────────────────────── */
+
+/** In cloud mode the bytes are in Storage, not in this browser, so a perfectly
+ *  good render arrives with `blob: null` and a pair of signed URLs. Everything
+ *  below exists because `rec.blob` used to be how the app asked "did this one
+ *  work?" — a test that still passes with that question restored is not testing
+ *  anything. */
+describe('a render whose bytes live in Storage', () => {
+  const cloud = (over: Partial<RenderRecord> = {}) => rec({
+    blob: null, thumbnail: undefined,
+    imageUrl: 'https://x.supabase.co/storage/v1/object/sign/renders/u/r.png?token=abc',
+    thumbUrl: 'https://x.supabase.co/storage/v1/object/sign/renders/u/r-thumb.png?token=abc',
+    ...over,
+  });
+
+  it('round-trips the signed URLs', async () => {
+    const one = cloud();
+    await putRender(one);
+    const back = await getRender(one.id);
+    expect(back).toMatchObject({ status: 'ready', imageUrl: one.imageUrl, thumbUrl: one.thumbUrl });
+    expect(back?.blob).toBeNull();
+  });
+
+  it('counts as succeeded on its status, which is the only thing that survives both modes', () => {
+    const ready = cloud();
+    expect(succeeded(ready)).toBe(true);
+    /* The bug this replaced: the old test was `!!rec.blob`, and it says the
+       opposite about the very same record. */
+    expect(Boolean(ready.blob)).toBe(false);
+
+    expect(succeeded(rec({ blob: bytes(10) }))).toBe(true);
+    expect(succeeded(cloud({ status: 'pending' }))).toBe(false);
+    expect(succeeded(rec({ status: 'failed', blob: null, error: 'filtered' }))).toBe(false);
+  });
+
+  /* The quota warning is about this browser's disk. Bytes in a bucket are not on
+     it, and counting them would nag about a limit that is not being approached. */
+  it('adds nothing to the bytes held on this browser', async () => {
+    await putRender(cloud({ id: 'cloud-1' }));
+    expect(await totalBytes()).toBe(0);
+    await putRender(rec({ id: 'local-1', blob: bytes(300) }));
+    expect(await totalBytes()).toBe(300);
+  });
+});
+
+describe('renderBlob', () => {
+  const realFetch = globalThis.fetch;
+  let asked: string[] = [];
+
+  /** Answers one fetch, and records what was asked for — so "did not go to the
+   *  network" is an assertion rather than a hope. */
+  const answer = (res: Partial<Response> | Error) => {
+    globalThis.fetch = (async (input: unknown) => {
+      asked.push(String(input));
+      if (res instanceof Error) throw res;
+      return res as Response;
+    }) as typeof fetch;
+  };
+
+  beforeEach(() => { asked = []; answer({ ok: true, blob: async () => bytes(512) }); });
+  afterEach(() => { globalThis.fetch = realFetch; });
+
+  it('hands back local bytes without asking the network for them', async () => {
+    const blob = await renderBlob(rec({ blob: bytes(64) }));
+    expect(blob?.size).toBe(64);
+    expect(asked).toEqual([]);
+  });
+
+  /* `<a download>` is ignored cross-origin — the browser navigates to the PNG
+     instead of saving it — so the bytes have to come back here first. */
+  it('downloads from the signed URL when there are no local bytes', async () => {
+    const url = 'https://x.supabase.co/storage/v1/object/sign/renders/u/r.png?token=abc';
+    const blob = await renderBlob(rec({ blob: null, imageUrl: url }));
+    expect(blob?.size).toBe(512);
+    expect(asked).toEqual([url]);
+  });
+
+  it('gives back nothing when there are neither bytes nor a URL', async () => {
+    expect(await renderBlob(rec({ blob: null }))).toBeNull();
+    expect(asked).toEqual([]);
+  });
+
+  /* An hour-old signed URL is a 400 from Storage, and the caller has to be able
+     to say "that link has expired" rather than save an error page as a PNG. */
+  it('gives back nothing when the link has expired', async () => {
+    answer({ ok: false, status: 400 });
+    expect(await renderBlob(rec({ blob: null, imageUrl: 'https://x.supabase.co/expired' }))).toBeNull();
+  });
+
+  it('gives back nothing when the network refuses outright', async () => {
+    answer(new TypeError('Failed to fetch'));
+    expect(await renderBlob(rec({ blob: null, imageUrl: 'https://x.supabase.co/offline' }))).toBeNull();
   });
 });
 

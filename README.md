@@ -12,6 +12,10 @@ install, works fully offline apart from the listing import.
 open index.html
 ```
 
+The same editor also runs as a Next app (`app/`, `src/`). That is the build with accounts, and the
+one that generates the AI renders itself instead of handing you a prompt to carry elsewhere — see
+[Accounts](#accounts-and-where-your-work-lives).
+
 ---
 
 ## How the Funda import actually works
@@ -29,12 +33,35 @@ The result is genuine editable geometry — walls with thickness, doors and wind
 named rooms with areas, fitted objects — not a traced bitmap. On the reference listing that is
 5 floors, 183 walls, 53 openings and 31 named rooms.
 
-**Privacy note:** the listing URL you paste is sent to `r.jina.ai`, a third-party service. Nothing
-else leaves your machine; everything you save stays in your browser's `localStorage`.
+**Privacy note:** the listing URL you paste is sent to `r.jina.ai`, a third-party service. Where the
+plan itself then goes depends on whether you are signed in — see below.
 
 **Fallbacks** when the proxy is rate-limited or the listing has no interactive plan: paste the page
 source yourself (View Source → paste), or drop in a floor-plan image and calibrate the scale by
 clicking a known distance.
+
+---
+
+## Accounts, and where your work lives
+
+There are two ways this runs, and which one you get depends entirely on whether the deployment has
+Supabase credentials.
+
+**With an account.** Sign in with your email address: you get a six-digit code, you type it in,
+that is the whole flow. There is no password anywhere in the system, so there is nothing to leak,
+reset or rotate. From then on your plans follow you between machines, and so do your renders — the
+documents in Postgres, the PNGs in a private bucket only your account can read. Your browser still
+holds a copy of every plan and the editor still writes to it synchronously, so nothing you do waits
+on the network; the copy upstairs catches up on a timer. Two devices editing one plan is
+last-write-wins, and the loser's edits are gone.
+
+**Without one.** No credentials, no accounts, no sign-in — the editor is exactly what it was before
+any of this. Everything you save stays in your browser's `localStorage`, renders in IndexedDB,
+nothing leaves the machine but the listing import. That is what the standalone `index.html` above
+is, what the test suite runs against, and what you get by cloning this and typing `pnpm dev`.
+
+Setting the first one up is [`docs/SUPABASE.md`](docs/SUPABASE.md), which is written to be followed
+against an empty Supabase project. `.env.example` lists every variable.
 
 ---
 
@@ -121,8 +148,16 @@ below · `A` Add tray (Simple) · `⌘Z` / `⇧⌘Z` undo, redo · `⌘D` duplic
 Playwright, driving the real file in Chrome — 68 tests, ~50 s.
 
 ```
-cd tests && npm install && npm test
+pnpm test                        # Vitest — engine, render store, job state machine
+pnpm test:e2e                    # Playwright — the standalone file
+E2E_TARGET=next pnpm test:e2e    # the same specs against the Next app
+E2E_GATE=1 pnpm test:e2e --project=gate   # sign-in, redirects, the JSON 401
 ```
+
+The first three run the app with no accounts and no gate, and `playwright.config.ts` forces that by
+blanking the Supabase variables for the server it starts — so a `.env.local` with real credentials
+in it cannot turn the suite red. The gate run starts its own server with credentials pointed at a
+host that deliberately cannot resolve.
 
 Imports run against local fixtures so they are deterministic and offline, with one deliberate live
 test against the real services so an upstream change is caught rather than hidden. See
@@ -131,6 +166,12 @@ test against the real services so an upstream change is caught rather than hidde
 ## Layout
 
 ```
-index.html                the entire application
-tests/                    Playwright suite + fixtures
+index.html                the standalone editor, one file, no build
+src/engine/               the geometry, catalog, renderer and prompt — no DOM, no React
+src/shell/                the React shell around it, and browser storage
+src/data/  src/server/    Supabase: config, schema, plan sync, renders
+app/                      Next routes: the editor, /login, /api/render
+supabase/migrations/      the database, RLS policies and the render bucket
+tests/                    Playwright suite + fixtures, Vitest units
+docs/                     ARCHITECTURE.md, SUPABASE.md
 ```

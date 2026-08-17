@@ -48,8 +48,15 @@ export interface RenderJob {
   /** the provider's own id — useful in logs, nowhere else */
   jobId: string;
   /** BFL's polling URL, kept verbatim: it is cluster-specific and a rebuilt one
-   *  answers "Task not found" */
+   *  answers "Task not found". Local mode only — in cloud mode this URL never
+   *  reaches the browser at all, which is the whole point of `renderId`. */
   pollUrl: string;
+  /** The `renders` row's uuid, cloud mode only. It is what the status route
+   *  polls on: the row holds the provider's URL, RLS scopes the row to its
+   *  owner, and so one account cannot poll another's job by guessing a job id.
+   *  Optional because in local mode there is no row and `pollUrl` is the whole
+   *  address of the job. */
+  renderId?: string;
   projectId: string;
   floorId: string;
   parentId: string | null;
@@ -64,10 +71,17 @@ export interface RenderJob {
   progress: number | null;
 }
 
-/** What `/api/render/status` answers, narrowed to what the poller acts on. */
+/** What `/api/render/status` answers, narrowed to what the poller acts on.
+ *
+ *  A ready response carries exactly one of `image` and `imageUrl`, decided by
+ *  the mode and not by the caller: local mode gets base64 straight through our
+ *  own server because BFL's delivery host sends no CORS header, cloud mode gets
+ *  a signed URL because the PNG is already in the bucket by the time the route
+ *  answers. Both optional here rather than two variants — the poller asks which
+ *  one arrived, and a route that sent neither is caught in one place. */
 export type PollResponse =
   | { status: 'pending'; progress?: number | null }
-  | { status: 'ready'; image: string; bytes?: number; cost?: number | null }
+  | { status: 'ready'; image?: string; imageUrl?: string; bytes?: number; cost?: number | null }
   | { status: 'failed'; error: string; retryable?: boolean };
 
 /** The slice the lifecycle functions operate on — everything else in the store
@@ -97,10 +111,18 @@ export function startJob(s: JobState, job: RenderJob): JobState {
  *  moment a credit is spent, which is why the session counter sits here: a
  *  request that never reached BFL cost nothing, and a job that fails at the
  *  provider has still been paid for. */
-export function acceptJob(s: JobState, id: string, jobId: string, pollUrl: string): JobState {
+export function acceptJob(
+  s: JobState, id: string, jobId: string, pollUrl: string, renderId?: string,
+): JobState {
   const job = s.jobs[id];
   if (!job) return s;
-  return { jobs: { ...s.jobs, [id]: { ...job, jobId, pollUrl } }, sessionCount: s.sessionCount + 1 };
+  return {
+    /* `renderId` is spread conditionally rather than assigned: an `undefined`
+       key is not the same thing as no key to a deep-equal assertion or to
+       JSON, and local mode's job object should stay exactly what it was. */
+    jobs: { ...s.jobs, [id]: { ...job, jobId, pollUrl, ...(renderId ? { renderId } : {}) } },
+    sessionCount: s.sessionCount + 1,
+  };
 }
 
 /** Folds one poll response into the state. A settled job leaves the map: the

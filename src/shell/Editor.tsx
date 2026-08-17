@@ -5,9 +5,11 @@ import { ed, useEditor } from '@state/store';
 import type { Tool } from '@state/store';
 import { blankProject } from '@engine/model';
 import { fitFloor } from '@engine/view';
+import { isCloud } from '@data/config';
+import { maybePush, startSync } from '@data/sync';
 import { Canvas } from './Canvas';
 import { commitDraft, deleteSelection, duplicateSelection, nudge } from './commands';
-import { autosave, readAutosave, readIndex, readRendersBar, saveProject } from './storage';
+import { adoptUser, autosave, readAutosave, readIndex, readRendersBar, saveProject } from './storage';
 import { readImageFile, readJsonFile } from './files';
 import { importFromUrl } from './funda';
 import { IconSprite } from './ui/Icons';
@@ -40,26 +42,44 @@ export function Editor() {
     ed().patch({ rendersOpen: readRendersBar() });
     if (ed().project) return;
 
-    const hash = decodeURIComponent(location.hash.slice(1));
-    if (hash === 'new' || hash === 'garden') {
-      ed().setProject(blankProject(hash === 'garden' ? 'Garden design' : 'Untitled plan', hash === 'garden'));
-      requestAnimationFrame(fit);
-      return;
-    }
-    if (hash.startsWith('import=')) {
+    const boot = () => {
+      /* Re-checked because the cloud branch below yields first, so React's
+         development double-mount can arrive here after the first pass already
+         loaded something. */
+      if (ed().project) return;
+
+      const hash = decodeURIComponent(location.hash.slice(1));
+      if (hash === 'new' || hash === 'garden') {
+        ed().setProject(blankProject(hash === 'garden' ? 'Garden design' : 'Untitled plan', hash === 'garden'));
+        requestAnimationFrame(fit);
+        return;
+      }
+      if (hash.startsWith('import=')) {
+        ed().patch({ modal: 'import' });
+        void importFromUrl(hash.slice(7), () => { /* the modal shows its own steps */ });
+        return;
+      }
+      const auto = readAutosave();
+      if (auto) {
+        /* Synchronous, and against the local index only. Whether the account
+           also holds this plan is not worth a network wait at boot — the library
+           pull that follows can correct it. */
+        ed().setProject(auto.p, { saved: readIndex().some(x => x.id === auto.p.id) });
+        ed().patch({ floorIndex: Math.min(auto.fi, auto.p.floors.length - 1) });
+        requestAnimationFrame(fit);
+        ed().toast(`Picked up where you left off — “${auto.p.name}”`);
+        return;
+      }
       ed().patch({ modal: 'import' });
-      void importFromUrl(hash.slice(7), () => { /* the modal shows its own steps */ });
-      return;
-    }
-    const auto = readAutosave();
-    if (auto) {
-      ed().setProject(auto.p, { saved: readIndex().some(x => x.id === auto.p.id) });
-      ed().patch({ floorIndex: Math.min(auto.fi, auto.p.floors.length - 1) });
-      requestAnimationFrame(fit);
-      ed().toast(`Picked up where you left off — “${auto.p.name}”`);
-      return;
-    }
-    ed().patch({ modal: 'import' });
+    };
+
+    /* In cloud mode the local cache is namespaced per account, so reading it
+       before we know whose it is would hand the last person's autosave to this
+       one. `adoptUser` reads the session cookie rather than the network, so this
+       costs a microtask; in local mode there is nobody to ask and boot stays as
+       synchronous as it has always been. */
+    if (isCloud()) void adoptUser().then(boot);
+    else boot();
   }, [fit]);
 
   /* fit once the first project lands */
@@ -69,9 +89,20 @@ export function Editor() {
      stays where it was and slides under it. */
   useEffect(() => { if (ed().project) requestAnimationFrame(fit); }, [rendersOpen, fit]);
 
+  /* ── the account's copy ─────────────────────────────────────── */
+  /* Reports through the store's toast, and hands back its own teardown — the
+     visibility listener it installs is what pushes the last edit up on the way
+     out of the tab, which `beforeunload` below cannot do. */
+  useEffect(() => startSync((m, k) => ed().toast(m, k)), []);
+
   /* ── autosave + leave guard ─────────────────────────────────── */
   useEffect(() => {
-    const t = setInterval(() => { if (ed().dirty) autosave(); }, 3000);
+    const t = setInterval(() => {
+      if (ed().dirty) autosave();
+      /* Outside the dirty check on purpose: a Save clears the flag and the copy
+         it queued for the account still has to go up. */
+      maybePush();
+    }, 3000);
     const before = (e: BeforeUnloadEvent) => {
       autosave();
       if (ed().dirty) { e.preventDefault(); e.returnValue = ''; }

@@ -31,6 +31,12 @@
       ],
       "@state/*": [
         "./src/state/*"
+      ],
+      "@data/*": [
+        "./src/data/*"
+      ],
+      "@server/*": [
+        "./src/server/*"
       ]
     }
   },

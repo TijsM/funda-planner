@@ -1,5 +1,9 @@
 import type { ViewKind } from '@engine/prompt';
 import { ed } from '@state/store';
+import { isCloud } from '@data/config';
+import {
+  cloudBytes, deleteCloudRender, deleteCloudRendersForPlan, listCloudRenders,
+} from '@data/cloudRenders';
 
 /** Browser-only store for generated renders. Deliberately its own database and
  *  not part of the document: `store.ts:127` JSON.stringifies the whole project
@@ -8,8 +12,16 @@ import { ed } from '@state/store';
  *  blow the quota on the first stroke of the wall tool. Records reference a
  *  project and a floor by id and are never referenced back.
  *
- *  Renders therefore live on this browser only — they do not travel with a JSON
- *  export, which is why per-render download is the product's only way out. */
+ *  In local mode renders therefore live on this browser only — they do not
+ *  travel with a JSON export, which is why per-render download is the product's
+ *  only way out.
+ *
+ *  In cloud mode the same four reads and writes are answered by
+ *  `@data/cloudRenders` instead, off a Postgres row and a private Storage
+ *  bucket. The dispatch is per function and nothing above this file branches:
+ *  every caller gets `RenderRecord`s either way. What differs is that a cloud
+ *  record carries signed URLs and `blob: null` — so `rec.status === 'ready'`,
+ *  never `rec.blob`, is what says one succeeded. */
 
 /* `.v1` in the name follows the localStorage keys in storage.ts: it marks a
    format break so drastic that the old data is abandoned wholesale. IDB_VERSION
@@ -49,9 +61,22 @@ export interface RenderRecord {
      so the absent case has to be handled at every read. */
   blob: Blob | null;
   thumbnail?: Blob;
+  /* Signed Storage URLs, cloud mode only — in local mode the bytes are right
+     there in `blob` and there is nothing to sign. They expire after an hour;
+     `refreshRenders()` re-signs the whole list on every open of the panel. */
+  imageUrl?: string;
+  thumbUrl?: string;
   createdAt: number;
   durationMs: number;
 }
+
+/** The one right way to ask "did this render produce an image?".
+ *
+ *  Never `rec.blob`. In cloud mode a perfectly good render carries no bytes at
+ *  all — they sit in Storage behind a signed URL — so every truth-test that used
+ *  to read the blob would quietly mark a whole account's renders failed, alert
+ *  icon and all. */
+export const succeeded = (rec: RenderRecord): boolean => rec.status === 'ready';
 
 /* Distinguishing "this browser refuses to open the database" from "the write
    failed" decides which message the user gets, and only the open path knows. */
@@ -167,6 +192,7 @@ function errName(err: unknown): string {
 
 /** This floor's renders, newest first. */
 export async function listRenders(projectId: string, floorId: string): Promise<RenderRecord[]> {
+  if (isCloud()) return listCloudRenders(projectId, floorId);
   try {
     const s = await reader();
     const rows = await done<RenderRecord[]>(s.index(IDX_FLOOR).getAll(floorRange(projectId, floorId)));
@@ -187,6 +213,10 @@ const bytesOf = (r: RenderRecord) => (r.blob?.size ?? 0) + (r.thumbnail?.size ??
  *  the delete-all button. Cursored rather than getAll()'d so a hundred PNGs are
  *  never all in hand at once. */
 export async function totalBytes(): Promise<number> {
+  /* In cloud mode the quota that matters is the account's, not the browser's —
+     and the account's copy is the only one there is, since nothing is written to
+     IndexedDB at all. */
+  if (isCloud()) return cloudBytes();
   try {
     const s = await reader();
     let sum = 0;
@@ -200,6 +230,13 @@ export async function totalBytes(): Promise<number> {
 /** Saves a render, upserting on `id`. Returns false when the bytes did not
  *  land, so the caller can keep the image on screen and say so. */
 export async function putRender(rec: RenderRecord): Promise<boolean> {
+  /* Cloud mode writes no record from the browser: `/api/render` inserted the row
+     before it answered and `/api/render/status` settled it, both server-side, so
+     by the time the poller has a record in hand the durable copy already exists.
+     True rather than false on purpose — the caller reads false as "these bytes
+     are only on screen, hold them for the life of the tab", and here they are
+     not, they are in Postgres and in the bucket. */
+  if (isCloud()) return true;
   try {
     await write(s => { s.put(rec); });
     return true;
@@ -226,6 +263,11 @@ export async function putRender(rec: RenderRecord): Promise<boolean> {
 }
 
 export async function deleteRender(id: string): Promise<boolean> {
+  if (isCloud()) {
+    if (await deleteCloudRender(id)) return true;
+    ed().toast('That render could not be deleted from your account — it will be back after a reload.', 'err');
+    return false;
+  }
   try {
     await write(s => { s.delete(id); });
     return true;
@@ -240,6 +282,7 @@ export async function deleteRender(id: string): Promise<boolean> {
 /** Drops every render of a project — for the library's delete, which otherwise
  *  leaves PNGs behind for a project that no longer exists. */
 export async function deleteRendersForProject(projectId: string): Promise<void> {
+  if (isCloud()) { await deleteCloudRendersForPlan(projectId); return; }
   try {
     await write(s => {
       walk(s.index(IDX_FLOOR).openCursor(projectRange(projectId)), (_r, c) => { c.delete(); })
@@ -264,6 +307,23 @@ export function pngFromBase64(b64: string): Blob {
   const bytes = new Uint8Array(raw.length);
   for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
   return new Blob([bytes], { type: 'image/png' });
+}
+
+/** The full-size bytes of one render, wherever they live — for download, which
+ *  is the one place that needs the actual file rather than something to point an
+ *  <img> at.
+ *
+ *  A cross-origin signed URL cannot simply be handed to `<a download>`: the
+ *  attribute is ignored on another origin and the browser navigates to the PNG
+ *  instead of saving it. So the bytes come back here first. */
+export async function renderBlob(rec: RenderRecord): Promise<Blob | null> {
+  if (rec.blob) return rec.blob;
+  if (!rec.imageUrl) return null;
+  try {
+    const res = await fetch(rec.imageUrl);
+    if (!res.ok) return null;
+    return await res.blob();
+  } catch { return null; }
 }
 
 /** Wipes the database. For tests and for the e2e `fresh()` helper — IndexedDB

@@ -5,8 +5,11 @@ import { ed, useEditor, useEditorShallow } from '@state/store';
 import type { Tool } from '@state/store';
 import { fmtM2, polyArea } from '@engine/geometry';
 import { floorArea } from '@engine/model';
+import { isCloud } from '@data/config';
 import { exportJson, exportPng } from '../files';
-import { saveProject, readIndex, writeRendersBar } from '../storage';
+import { saveProject, writeRendersBar } from '../storage';
+import { libraryList } from '../library';
+import { currentEmail, signOut } from '../account';
 import { addFloor, deleteSelection, removeFloor } from '../commands';
 import { Icon } from './Icons';
 
@@ -17,13 +20,31 @@ export function TopBar() {
   }));
   const src = project?.source;
 
-  /* After mount, never during render. readIndex() reaches into localStorage,
-     which the server does not have — so the server sent "" and the client drew
-     "· 2", and React threw a hydration mismatch onto the console for any
-     browser whose library was not empty. Re-read when a save lands or the
-     library modal closes, which is all that can change the count. */
+  /* After mount, never during render. The count comes from localStorage, which
+     the server does not have — so the server sent "" and the client drew "· 2",
+     and React threw a hydration mismatch onto the console for any browser whose
+     library was not empty. Now it also comes from the account, which makes it
+     asynchronous but changes nothing about that rule: still a mount effect,
+     still nothing read while rendering. Re-read when a save lands or the library
+     modal closes, which is all that can change the count. */
   const [saved, setSaved] = useState(0);
-  useEffect(() => { setSaved(readIndex().length); }, [savedId, modal, dirty]);
+  useEffect(() => {
+    let live = true;
+    void libraryList().then(l => { if (live) setSaved(l.length); });
+    return () => { live = false; };
+  }, [savedId, modal, dirty]);
+
+  /* `isCloud()` is a build-time literal, identical on the server and in the
+     browser, so branching the markup on it is hydration-safe. The address is
+     not — it comes from the session cookie — so it lands after mount. */
+  const cloud = isCloud();
+  const [email, setEmail] = useState('');
+  useEffect(() => {
+    if (!cloud) return;
+    let live = true;
+    void currentEmail().then(e => { if (live) setEmail(e ?? ''); });
+    return () => { live = false; };
+  }, [cloud]);
 
   return (
     <header className="topbar">
@@ -68,6 +89,32 @@ export function TopBar() {
         title="Show the renders made from this plan"
         onClick={() => { writeRendersBar(!rendersOpen); ed().patch({ rendersOpen: !rendersOpen }); }}
       ><Icon id="i-img" />Renders</button>
+
+      {cloud && (
+        <>
+          <div className="sep" />
+          <span
+            id="acctMail" className="mono" title={email ? `Signed in as ${email}` : undefined}
+            style={{
+              fontSize: 9.5, color: 'var(--tx-3)', maxWidth: 150,
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}
+          >{email}</span>
+          <button
+            className="btn ghost" id="btnSignOut" title="Sign out of this browser"
+            /* The confirm is not ceremony: signing out clears this browser's
+               copy of the library, and a plan too big to sync only ever existed
+               here. Say that before it happens rather than after. */
+            onClick={() => {
+              if (!confirm(
+                'Sign out? This browser’s copy of your plans is cleared — anything that has not '
+                + 'synced to your account will be gone.',
+              )) return;
+              void signOut();
+            }}
+          >Sign out</button>
+        </>
+      )}
       <span hidden data-dirty={dirty ? '1' : '0'} />
     </header>
   );

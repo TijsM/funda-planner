@@ -10,8 +10,10 @@ import { buildPrompt, planFacts, type ViewKind } from '@engine/prompt';
 import { polyArea } from '@engine/geometry';
 import { fmtM2 } from '@engine/geometry';
 import { slug } from '@engine/io/serialize';
+import { isCloud } from '@data/config';
+import { RESIGN_EVERY_MS } from '@data/cloudRenders';
 import { download, renderFloorCanvas } from '../files';
-import { deleteRender, totalBytes, type RenderRecord } from '../renders';
+import { deleteRender, renderBlob, succeeded, totalBytes, type RenderRecord } from '../renders';
 import { refreshRenders, startRender } from '../jobs';
 import { Icon } from './Icons';
 import { fullUrlFor, releaseAllBut, urlFor } from './renderUrls';
@@ -51,9 +53,14 @@ export function RenderModal() {
 
   const [img, setImg] = useState('');
   const [canvas, setCanvas] = useState<HTMLCanvasElement | null>(null);
-  /* Every project's renders, not this floor's — the quota that runs out is the
-     browser's, and it is the total that decides when the next save fails. */
+  /* Every project's renders, not this floor's — locally the quota that runs out
+     is the browser's and it is the total that decides when the next save fails;
+     in the cloud it is what the account is storing. Either way the figure is
+     only honest if it counts everything. */
   const [bytes, setBytes] = useState(0);
+  /* Read once per render of this component rather than threaded down: it decides
+     three sentences of copy and nothing about behaviour. */
+  const cloud = isCloud();
 
   const job = useMemo(() => Object.values(jobs)[0] ?? null, [jobs]);
   const elapsed = job ? Math.max(0, Math.round((now - job.startedAt) / 1000)) : 0;
@@ -78,6 +85,16 @@ export function RenderModal() {
   }, [room, namedRooms]);
 
   useEffect(() => { void refreshRenders(); }, [project?.id, floor?.id]);
+
+  /* Cloud only: the filmstrip and the stage both draw signed URLs with an hour
+     on them, and every other refresh here is an event. A panel left open past
+     that hour showed broken cells and a blank stage with nothing to explain it.
+     Local mode holds the bytes and has nothing to re-sign. */
+  useEffect(() => {
+    if (!cloud) return;
+    const t = setInterval(() => { void refreshRenders(); }, RESIGN_EVERY_MS);
+    return () => clearInterval(t);
+  }, [cloud]);
 
   useEffect(() => {
     releaseAllBut(renders);
@@ -122,7 +139,9 @@ export function RenderModal() {
     return i < 0 ? null : renders.length - i;
   };
   const selected = renders.find(r => r.id === selectedId) ?? null;
-  const shown = selected?.blob ? selected : null;
+  /* `succeeded`, not `selected.blob`: a cloud render is ready with no bytes in
+     hand at all, and the blob test used to be what put it on the stage. */
+  const shown = selected && succeeded(selected) ? selected : null;
   const parent = parentId ? renders.find(r => r.id === parentId) ?? null : null;
   const out = canvas ? outputDims(canvas.width, canvas.height) : null;
   const seedNum = parseSeed(seed);
@@ -159,9 +178,15 @@ export function RenderModal() {
     }, 'image/png');
   };
 
-  const downloadRender = (rec: RenderRecord) => {
-    if (!rec.blob) return;
-    download(rec.blob, `${slug(`${project.name}-${floor.name}`)}-render-${numberOf(rec.id) ?? 1}-seed${rec.seed ?? 0}.png`);
+  /* Async because in cloud mode the bytes are behind a signed URL rather than in
+     the record — see `renderBlob`. Local mode still resolves without a request. */
+  const downloadRender = async (rec: RenderRecord) => {
+    const blob = await renderBlob(rec);
+    if (!blob) {
+      ed().toast('That render could not be fetched for download — reopen this panel and try again.', 'err');
+      return;
+    }
+    download(blob, `${slug(`${project.name}-${floor.name}`)}-render-${numberOf(rec.id) ?? 1}-seed${rec.seed ?? 0}.png`);
   };
 
   const removeRender = async (rec: RenderRecord) => {
@@ -253,7 +278,7 @@ export function RenderModal() {
 
           <div className="ai-right">
             <span className="lbl">
-              {selected ? `Render #${numberOf(selected.id)}${selected.blob ? '' : ' — failed'}` : 'Reference image'}
+              {selected ? `Render #${numberOf(selected.id)}${succeeded(selected) ? '' : ' — failed'}` : 'Reference image'}
             </span>
             <div className="ai-prev">
               {img ? <img id="aiImg" src={img} alt="clean floor plan reference" className={shown ? 'off' : ''} /> : null}
@@ -263,7 +288,13 @@ export function RenderModal() {
                 <div className="ai-run" id="aiRun">
                   <b>{elapsed}s</b>
                   <span>Rendering — this usually takes 20 to 60 seconds.</span>
-                  <em>Keep working; closing this panel does not cancel it. A render in progress is lost if you reload or close the tab.</em>
+                  {/* The second half of this sentence stopped being true in the
+                      cloud: the job lives in a row now, so a reload picks it
+                      back up. Locally it is still the plain truth. */}
+                  <em>Keep working; closing this panel does not cancel it.{' '}
+                    {cloud
+                      ? 'A render in progress is picked back up if you reload.'
+                      : 'A render in progress is lost if you reload or close the tab.'}</em>
                 </div>
               )}
             </div>
@@ -277,8 +308,8 @@ export function RenderModal() {
                 <span className="mono">{selected.model}</span>
                 <div className="spring" />
                 <button className="btn sm" id="aiUse" onClick={() => useSettingsOf(selected)}>Use these settings</button>
-                {selected.blob && (
-                  <button className="btn sm" id="aiDlRender" onClick={() => downloadRender(selected)} title="Download this render"><Icon id="i-dl" /></button>
+                {succeeded(selected) && (
+                  <button className="btn sm" id="aiDlRender" onClick={() => void downloadRender(selected)} title="Download this render"><Icon id="i-dl" /></button>
                 )}
                 <button className="btn sm dgr" id="aiDelRender" onClick={() => void removeRender(selected)} title="Delete this render"><Icon id="i-trash" /></button>
               </div>
@@ -332,11 +363,12 @@ export function RenderModal() {
               {renders.map(r => {
                 const n = numberOf(r.id);
                 const from = numberOf(r.parentId);
+                const ok = succeeded(r);
                 return (
-                  <button key={r.id} data-id={r.id} className={`ai-cell${r.id === selectedId ? ' on' : ''}${r.blob ? '' : ' bad'}`}
+                  <button key={r.id} data-id={r.id} className={`ai-cell${r.id === selectedId ? ' on' : ''}${ok ? '' : ' bad'}`}
                     onClick={() => rs().patch({ selectedId: r.id })}
                     title={r.error ?? `Render #${n}, seed ${r.seed ?? 'unknown'}`}>
-                    {r.blob ? <img src={urlFor(r)} alt={`render ${n}`} /> : <Icon id="i-alert" />}
+                    {ok ? <img src={urlFor(r)} alt={`render ${n}`} /> : <Icon id="i-alert" />}
                     <b>#{n}</b>
                     <em>{r.seed ?? '—'}</em>
                     {from !== null && <u>from #{from}</u>}
@@ -345,8 +377,12 @@ export function RenderModal() {
               })}
             </div>
             <div className="hint" id="aiLocal">
-              Renders live in this browser only — they do not travel with a JSON export, so download
-              the ones worth keeping.{bytes > 0 && ` Every render on this browser: ${(bytes / 1048576).toFixed(1)} MB.`}
+              {cloud
+                ? <>Renders are kept in your account — they do not travel with a JSON export, so download
+                  the ones worth keeping.</>
+                : <>Renders live in this browser only — they do not travel with a JSON export, so download
+                  the ones worth keeping.</>}
+              {bytes > 0 && ` Every render ${cloud ? 'in your account' : 'on this browser'}: ${(bytes / 1048576).toFixed(1)} MB.`}
             </div>
           </div>
         </div>
