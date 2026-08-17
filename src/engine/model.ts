@@ -84,8 +84,16 @@ export function contentBBox(f: Floor | null | undefined) {
   return pts.length ? bboxOf(pts) : null;
 }
 
-/** the building only — walls and rooms. Orientation and the AI reference frame
- *  use this so a chair dropped off the edge cannot rotate every compass point. */
+/** The building only — walls and rooms.
+ *
+ *  Used wherever a stray object must not move the reference: the compass points
+ *  in `prompt.ts`, so a chair dropped off the edge cannot rotate every one of
+ *  them; the dimension chains in `render.ts`, which measure the building rather
+ *  than its furniture; and the title block's stated footprint.
+ *
+ *  It is deliberately NOT what frames the exported picture — that is
+ *  `contentBBox` in `files.ts`, because a picture cropped to the walls would cut
+ *  off a terrace or a garden bed drawn beyond them. */
 export function shellBBox(f: Floor) {
   const pts: Pt[] = [];
   f.walls.forEach(w => pts.push(w.a, w.b));

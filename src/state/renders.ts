@@ -257,10 +257,20 @@ export const useRenders = create<RenderState>(set => ({
   furniture: true,
   dimensions: true,
   roomLabels: false,
-  /* On by default. Lettering on the conditioning image can bleed into a render,
-     so the hint under the preview says so — but that is a trade-off to make at
-     the point of use, not one to make silently on someone's behalf. */
-  imgMeasures: true,
+  /* Off by default, having shipped on and been wrong about it.
+
+     With it on, the conditioning image carries three separate kinds of lettering
+     — a "X × Y m" caption at every room's centroid, the overall chains captioned
+     to two decimals, and a labelled scale bar — while the prompt ends by
+     promising "no text or labels anywhere in the image". The picture wins that
+     argument. Renders came back with a title block and edge dimensions reading
+     15.60 m and 0.65 m: the model copying our own caption format and filling in
+     numbers it could not read.
+
+     It stays a toggle, because measurements on the reference are a reasonable
+     thing to want and the hint under the preview still explains the cost. What
+     changed is which way round the default should be. */
+  imgMeasures: false,
   prompt: '',
   promptKey: '',
   seed: '',

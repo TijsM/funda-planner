@@ -88,7 +88,20 @@ export function renderFloorCanvas(
       };
     }
   }
-  const b = contentBBox({ ...framed, notes: opts.clean ? [] : framed.notes, ref: null });
+  /* Frame on what will actually be drawn, and nothing else. A clean reference
+     hides the dimension chains and the notes (`layers.dims`/`notes` are false
+     below), so counting them here framed the picture around ink that is not in
+     it — and an imported plan's chains sprawl a metre past the walls, which made
+     the frame much wider than the building without making it taller. The plan
+     then sat in a letterbox, and the generator filled the spare bands with an
+     invented title block and captions of its own. Symmetric with `notes`, which
+     was already excluded for exactly this reason. */
+  const b = contentBBox({
+    ...framed,
+    notes: opts.clean ? [] : framed.notes,
+    dims: opts.clean ? [] : framed.dims,
+    ref: null,
+  });
   if (!b) return null;
   const maxPx = opts.maxPx ?? 3600;
   const fit = (pad: number) => {
