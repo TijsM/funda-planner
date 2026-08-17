@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { supabaseConfig } from '@data/config';
 import type { Database } from '@data/schema';
+import { forget, lapsed, touch } from './lastSeen';
 
 /** The half of the gate that talks to Supabase: refresh the session on every
  *  request, and say who is asking.
@@ -60,8 +61,24 @@ export async function readSession(request: NextRequest): Promise<Session> {
 
   const { data } = await supabase.auth.getClaims();
   const sub = data?.claims?.sub;
+  const userId = typeof sub === 'string' && sub ? sub : null;
 
-  return { response, userId: typeof sub === 'string' && sub ? sub : null };
+  if (!userId) return { response, userId: null };
+
+  const now = Date.now();
+  if (lapsed(request, now)) {
+    /* Revoked, not just forgotten. Clearing our own cookie would turn this
+       browser away while leaving a refresh token that still works everywhere
+       else, which is a session that has not really ended. `signOut` writes the
+       cleared auth cookies through the same `setAll` above, so `response`
+       already carries them by the time this returns. */
+    await supabase.auth.signOut();
+    forget(response);
+    return { response, userId: null };
+  }
+
+  touch(response, now);
+  return { response, userId };
 }
 
 /** Moves the refreshed auth cookies onto a different response. Without this a

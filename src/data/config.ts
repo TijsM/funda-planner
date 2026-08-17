@@ -42,6 +42,22 @@ function readConfig(): SupabaseConfig | null {
 /** The Supabase credentials, or null in local mode. */
 export const supabaseConfig = (): SupabaseConfig | null => readConfig();
 
+/** How long a browser stays signed in without being used: seven idle days.
+ *
+ *  Rolling rather than fixed — every request pushes it another week out, so
+ *  somebody who opens the app weekly is never asked for a code again, and nobody
+ *  is signed out in the middle of a meeting. Only a week of silence ends it.
+ *
+ *  Enforced by the proxy, which is the third thing tried and the only one that
+ *  works. Supabase's own `sessions_inactivity_timeout` is the right mechanism and
+ *  is refused on this plan — *"User sessions can only be configured on Pro Plans
+ *  and up"*. Shortening the auth cookie is the obvious fallback and is not
+ *  possible either: `@supabase/ssr` spreads your `cookieOptions` and then
+ *  overwrites `maxAge` with its own 400-day default
+ *  (`node_modules/@supabase/ssr/dist/main/cookies.js`), so the option is accepted
+ *  and ignored. Hence `src/server/lastSeen.ts`. */
+export const SESSION_MAX_AGE_S = 7 * 24 * 60 * 60;
+
 /** True when this process talks to Supabase at all. The single question every
  *  call site asks; nothing outside this file should read the env vars. */
 export const isCloud = (): boolean => readConfig() !== null;

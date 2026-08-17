@@ -152,6 +152,45 @@ test('the whole sign-in: an address, a code, and the editor', async ({ page }) =
   expect(cookies.some(c => /^sb-.*auth-token/.test(c.name))).toBe(true);
 });
 
+/** Seven idle days ends a session, and any use inside the week pushes it back.
+ *
+ *  Enforced by the proxy against a `pgs.seen` timestamp, because neither of the
+ *  two obvious mechanisms is available: Supabase's `sessions_inactivity_timeout`
+ *  needs a Pro plan, and `@supabase/ssr` accepts a `maxAge` on the auth cookie
+ *  and then overwrites it with its own 400-day default. Both were tried and both
+ *  failed silently, which is exactly why this is pinned.
+ *
+ *  The clock moves by rewriting the cookie rather than by waiting a week. */
+test('a week away ends the session; using it keeps the week rolling', async ({ page, context }) => {
+  await signIn(page);
+
+  const seen = (await context.cookies()).find(c => c.name === 'pgs.seen');
+  expect(seen, 'the proxy should stamp pgs.seen on a signed-in request').toBeTruthy();
+
+  /* Six days idle: inside the window, so still signed in — and the visit has to
+     push the stamp forward, which is the whole difference between a rolling week
+     and a hard one. */
+  const sixDaysAgo = Date.now() - 6 * 24 * 60 * 60 * 1000;
+  await context.addCookies([{ ...seen, value: String(sixDaysAgo) }]);
+  await page.goto('/');
+  await expect(page.locator('#cv')).toBeVisible();
+
+  const rolled = (await context.cookies()).find(c => c.name === 'pgs.seen');
+  expect(Number(rolled.value)).toBeGreaterThan(sixDaysAgo);
+
+  /* Eight days idle: past the window. Revoked rather than merely forgotten, so
+     the auth cookies go with it. */
+  const eightDaysAgo = Date.now() - 8 * 24 * 60 * 60 * 1000;
+  await context.addCookies([{ ...seen, value: String(eightDaysAgo) }]);
+  await page.goto('/');
+
+  await expect(page).toHaveURL(/\/login/);
+  await expect(page.locator('#email')).toBeVisible();
+
+  const live = (await context.cookies()).filter(c => /^sb-.*auth-token/.test(c.name) && c.value);
+  expect(live).toHaveLength(0);
+});
+
 /** The `?next=` round trip, end to end and for real: the proxy writes it on the
  *  way in, this form reads it on the way out. `safeDestination` has its own unit
  *  tests for the hostile inputs; this is the one that proves the benign case
