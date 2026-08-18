@@ -128,6 +128,14 @@ export function RenderModal() {
     setImg(cv ? cv.toDataURL('image/png') : '');
   }, [floor, furniture, roomLabels, imgMeasures, rev]);
 
+  /* Open on the reference image, never on whichever render was selected last
+     time. The right pane is what the next Generate is built from — a previous
+     render sitting there reads as though *that* were the image being sent, and
+     it never is: `startRender()` always hands the provider this canvas. Mount
+     only, so a render that lands while the panel is open still takes the stage
+     (`jobs.ts` selects it), and the filmstrip is one click from any older one. */
+  useEffect(() => { rs().patch({ selectedId: null }); }, []);
+
   if (!project || !floor) return null;
 
   /* Numbered oldest-first — the list is newest-first, so #1 is the last row.
