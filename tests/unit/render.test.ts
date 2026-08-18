@@ -5,6 +5,7 @@ import {
   CATALOG, CAT_BY_KIND, blankProject, fmlToProject, handlesFor, parseFundaSource, pointInPoly,
   resolveSel,
 } from '@engine/index';
+import { SEATS } from '@engine/catalog';
 import { paint } from '@engine/render';
 import type { Fml } from '@engine/io/funda';
 import type { Draft, Layers, Pt, View } from '@engine/types';
@@ -251,6 +252,58 @@ describe('catalogue glyphs', () => {
       }
     }
   });
+});
+
+describe('tables seat the number they are named after', () => {
+  /* Every chair is one translate() and nothing else in these glyphs translates,
+     so the calls are the seats — centre and all. The count is the point: a
+     "Round 6p" shipped with eight, four of them at the corners of a circle,
+     and the render drew all eight because the reference did. */
+  function seatsOf(kind: string) {
+    const at: Pt[] = [];
+    const o: Record<string, unknown> = {};
+    for (const m of [
+      'beginPath', 'moveTo', 'lineTo', 'closePath', 'stroke', 'fill', 'arc', 'save', 'restore',
+      'setLineDash', 'quadraticCurveTo', 'rotate', 'scale', 'rect', 'fillText',
+    ]) o[m] = () => {};
+    o.translate = (x: number, y: number) => { at.push({ x, y }); };
+    o.measureText = () => ({ width: 40 });
+    const e = CAT_BY_KIND[kind];
+    e.draw(o as never, e.w, e.h, 0.5);
+    return { at, e };
+  }
+
+  for (const [kind, n] of Object.entries(SEATS)) {
+    it(`${kind} (${CAT_BY_KIND[kind].name}) draws ${n} chairs`, () => {
+      expect(seatsOf(kind).at).toHaveLength(n);
+    });
+  }
+
+  /* The rule as it was put to us: a table for six is three a side, not two a
+     side and a carver at each head. */
+  for (const kind of ['dt4', 'dt6', 'dt8', 'gtable']) {
+    it(`${kind} seats nobody at its ends`, () => {
+      const { at, e } = seatsOf(kind);
+      for (const p of at) {
+        expect(Math.abs(p.y), `${kind} chair at ${p.x},${p.y}`).toBeGreaterThan(e.h / 2);
+        expect(Math.abs(p.x), `${kind} chair at ${p.x},${p.y}`).toBeLessThan(e.w / 2);
+      }
+      /* and evenly split between the two long sides */
+      expect(at.filter(p => p.y < 0)).toHaveLength(at.length / 2);
+    });
+  }
+
+  /* Round tables used to lay their chairs out on a bounding box. */
+  for (const kind of ['dtr', 'ktable', 'ktable2']) {
+    it(`${kind} rings its chairs evenly around the circle`, () => {
+      const { at, e } = seatsOf(kind);
+      const r = at.map(p => Math.hypot(p.x, p.y));
+      for (const d of r) expect(d).toBeCloseTo(e.w / 2 + 22, 6);
+      const ang = at.map(p => Math.atan2(p.y, p.x)).sort((a, b) => a - b);
+      const step = 6.2832 / at.length;
+      for (let i = 1; i < ang.length; i++) expect(ang[i] - ang[i - 1]).toBeCloseTo(step, 3);
+    });
+  }
 });
 
 describe('L-shaped seating', () => {

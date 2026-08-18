@@ -1,6 +1,6 @@
 import type { Area, BBox, Floor, Item, Pt, Project } from './types';
 import { bearing, compass, polyArea, polyCentroid, pointInPoly, unitNormal } from './geometry';
-import { CAT_BY_KIND } from './catalog';
+import { CAT_BY_KIND, SEATS } from './catalog';
 import { descOf, labelOf, shellBBox } from './model';
 
 export type ViewKind = 'top' | 'eye' | 'iso' | 'sketch';
@@ -237,6 +237,19 @@ export function buildPrompt(project: Project, f: Floor, opts: PromptOpts): strin
     L.push('', 'The staircase goes up to the floor above: draw it as an enclosed run of'
       + ' steps, not as furniture and not as a corridor.');
   }
+  /* The chairs are on the plan, drawn and counted, and the model was reading
+     them as decoration: a six-seater came back with eight seats because the
+     reference had eight blobs round it and nothing in the text said the blobs
+     were furniture with a number. Say both — what they are, and that the count
+     is the drawing's, not the model's to round up. */
+  const seated = rooms.flatMap(r => r.items).concat(only ? [] : F.loose).filter(i => SEATS[i.kind]);
+  if (opts.furniture && seated.length) {
+    const total = seated.reduce((n, i) => n + SEATS[i.kind], 0);
+    L.push('', `The small squares drawn around every table are chairs — ${total} of them across`
+      + ` ${seated.length} table${seated.length === 1 ? '' : 's'}. Reproduce exactly the number drawn`
+      + ' at each table, in the positions drawn: chairs sit along the sides that have them and'
+      + ' nowhere else, and a table with no chair at its head does not get one.');
+  }
   /* Outside the block above on purpose: a floor can consist of nothing but
      anonymous fitted blocks, and that is precisely when this needs saying. */
   if (!only && opts.furniture && F.anonFitted) {
@@ -271,7 +284,20 @@ export function buildPrompt(project: Project, f: Floor, opts: PromptOpts): strin
     L.push(`${F.doors} doorway${F.doors === 1 ? '' : 's'} connect the rooms. Do not add windows or doors that are not listed.`, '');
   }
 
-  if (opts.style?.trim()) L.push('STYLE', opts.style.trim(), '');
+  if (opts.style?.trim()) {
+    /* A heading with the user's two words under it was being read as flavour
+       text and losing to the RENDER block right below, which asserts daylight
+       and realistic materials whatever anyone typed. What was missing is a
+       verb and a scope: name what the style governs, and — since it is the one
+       instruction that could be mistaken for permission to redecorate the
+       plan — say what it does not. */
+    L.push('STYLE — governs every material, colour, finish, fitting and light in the image');
+    L.push(sentence(opts.style.trim()));
+    L.push('Apply it consistently across the whole floor, to the fitted units and the flooring'
+      + ' as much as the loose furniture. It changes how the space looks, never what is in it'
+      + ' or where: the layout above still wins.');
+    L.push('');
+  }
   if (F.notes.length) {
     L.push('NOTES FROM THE PLAN');
     F.notes.slice(0, 8).forEach(n => L.push(`- ${n}`));

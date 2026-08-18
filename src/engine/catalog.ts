@@ -25,6 +25,24 @@ export const ln = (g: Ctx, x1: number, y1: number, x2: number, y2: number) => { 
 export const ci = (g: Ctx, x: number, y: number, r: number, fill?: number) => { g.beginPath(); g.arc(x, y, r, 0, 6.2832); fill ? g.fill() : g.stroke(); };
 export const box = (g: Ctx, w: number, h: number, r?: number) => { rr(g, -w / 2, -h / 2, w, h, r || 2); g.fill(); g.stroke(); };
 
+/* A dining chair is about 45 cm square and tucks in until its front edge meets
+   the table, so its centre sits a little over half its own depth beyond the
+   edge. Both numbers are shared by the straight and the round layout so a round
+   table's seats are the same size as a rectangular one's. */
+const CHAIR = 40;
+const CHAIR_OFF = 22;
+
+/** How many chairs each table's glyph actually draws.
+ *
+ *  The image-generator brief tells the model to count the chairs off the
+ *  drawing, so the number in the text and the number on the plan have to come
+ *  from one place or the brief argues with its own reference image — which is
+ *  how a "Round 6p" got rendered with eight. `render.test.ts` counts what the
+ *  glyphs draw and fails if this drifts from it. */
+export const SEATS: Record<string, number> = {
+  dt4: 4, dt6: 6, dt8: 8, dtr: 6, ktable: 4, ktable2: 2, gtable: 6,
+};
+
 /* generic glyph builders */
 export const G = {
   /* upholstered seat: body + back along top edge + arms */
@@ -83,12 +101,54 @@ export const G = {
   },
   table(g: Ctx, w: number, h: number) { box(g, w, h, 3); },
   round(g: Ctx, w: number) { ci(g, 0, 0, w / 2); g.fill(); ci(g, 0, 0, w / 2); },
+  /** One chair from above, centred on (cx, cy), its back on the far side of
+   *  `ang` — 0 is a chair tucked against a table's top edge, back uppermost.
+   *
+   *  This was a filled circle until an in-app render came back with round tub
+   *  stools ringing every table. The generator reproduces the reference
+   *  drawing, so a chair has to read as a chair *here* before it can read as
+   *  one there: a squared seat plus a back band is the least that does it. The
+   *  band is drawn over the seat at the same alpha — two translucent fills
+   *  overlapping is what makes it darker, and is the whole tell. */
+  chair(g: Ctx, cx: number, cy: number, ang: number, s = CHAIR) {
+    g.save();
+    g.translate(cx, cy); g.rotate(ang);
+    rr(g, -s / 2, -s / 2, s, s, 7); g.fill(); g.stroke();
+    rr(g, -s / 2, -s / 2, s, s * .26, 4); g.fill();
+    g.restore();
+  },
+  /** `n` chairs along *each* of two opposing edges of a w×h table — the long
+   *  edges by default, the short ones with `side: 'lr'`. So the count a caller
+   *  passes is per side and the seat count is twice it, which is why a table
+   *  that seats nobody at its ends simply omits the second call. */
   chairs(g: Ctx, w: number, h: number, n: number, side?: 'lr') {
     g.save(); g.globalAlpha = .55;
     for (let i = 0; i < n; i++) {
       const t = (i + .5) / n;
-      if (side === 'lr') { ci(g, -w / 2 - 22, -h / 2 + t * h, 17, 1); ci(g, w / 2 + 22, -h / 2 + t * h, 17, 1); }
-      else { ci(g, -w / 2 + t * w, -h / 2 - 22, 17, 1); ci(g, -w / 2 + t * w, h / 2 + 22, 17, 1); }
+      if (side === 'lr') {
+        const y = -h / 2 + t * h;
+        G.chair(g, -w / 2 - CHAIR_OFF, y, -Math.PI / 2);
+        G.chair(g, w / 2 + CHAIR_OFF, y, Math.PI / 2);
+      } else {
+        const x = -w / 2 + t * w;
+        G.chair(g, x, -h / 2 - CHAIR_OFF, 0);
+        G.chair(g, x, h / 2 + CHAIR_OFF, Math.PI);
+      }
+    }
+    g.restore();
+  },
+  /** `n` chairs spaced evenly around a round table of diameter `w`, each facing
+   *  the middle — and `n` here is the seat count, not a per-side one.
+   *
+   *  Round tables used to borrow `chairs()` against a shrunken bounding box,
+   *  which put the seats on a square: a "Round 6p" came out with eight, four of
+   *  them in the corners of a circle, and the render dutifully drew all eight. */
+  rchairs(g: Ctx, w: number, n: number) {
+    g.save(); g.globalAlpha = .55;
+    const r = w / 2 + CHAIR_OFF;
+    for (let i = 0; i < n; i++) {
+      const a = -Math.PI / 2 + (i / n) * 6.2832;
+      G.chair(g, Math.cos(a) * r, Math.sin(a) * r, a + Math.PI / 2);
     }
     g.restore();
   },
@@ -154,12 +214,16 @@ const RAW: [string, [string, string, number, number, Glyph, string?][]][] = [
     ['fireplc', 'Fireplace',   120,  35, (g, w, h) => { box(g, w, h, 1); g.save(); g.globalAlpha = .4; rr(g, -w * .28, -h / 2 + 6, w * .56, h - 10, 2); g.fill(); g.restore(); }],
   ]],
   ['Dining', [
-    ['dt4',   'Table 4p',  120,  80, (g, w, h) => { G.chairs(g, w, h, 1, 'lr'); G.chairs(g, w, h, 1); G.table(g, w, h); }],
-    ['dt6',   'Table 6p',  180,  90, (g, w, h) => { G.chairs(g, w, h, 2); G.chairs(g, w, h, 1, 'lr'); G.table(g, w, h); }],
-    ['dt8',   'Table 8p',  220, 100, (g, w, h) => { G.chairs(g, w, h, 3); G.chairs(g, w, h, 1, 'lr'); G.table(g, w, h); }],
+    /* Seats along the two long sides and none at the ends — the way a table is
+       actually laid, and half the stated count per side. The end chairs used to
+       make up the number (2+2+1+1 for a six), which is a carver at each head:
+       a real arrangement, but not the one anyone means by "table for six". */
+    ['dt4',   'Table 4p',  120,  80, (g, w, h) => { G.chairs(g, w, h, 2); G.table(g, w, h); }],
+    ['dt6',   'Table 6p',  180,  90, (g, w, h) => { G.chairs(g, w, h, 3); G.table(g, w, h); }],
+    ['dt8',   'Table 8p',  220, 100, (g, w, h) => { G.chairs(g, w, h, 4); G.table(g, w, h); }],
     /* "Round 6p" is the only word here a search for "round table" can match, and
        nobody types the name of a thing they are still looking for. */
-    ['dtr',   'Round 6p',  130, 130, (g, w, h) => { G.chairs(g, w * .74, h * .74, 3); G.chairs(g, w * .74, h * .74, 1, 'lr'); G.round(g, w); }, 'round table circular ronde tafel eettafel dining'],
+    ['dtr',   'Round 6p',  130, 130, (g, w) => { G.rchairs(g, w, 6); G.round(g, w); }, 'round table circular ronde tafel eettafel dining'],
     ['chair', 'Chair',      46,  48, (g, w, h) => { box(g, w, h, 3); g.save(); g.globalAlpha = .45; rr(g, -w / 2, -h / 2, w, 8, 2); g.fill(); g.restore(); }],
     ['stool', 'Bar stool',  38,  38, (g, w) => G.round(g, w), 'round circular barkruk kruk'],
     ['sideb', 'Sideboard', 180,  45, (g, w, h) => G.cabinet(g, w, h, 3)],
@@ -195,8 +259,8 @@ const RAW: [string, [string, string, number, number, Glyph, string?][]][] = [
     /* A kitchen that is eaten in needs a table, and the group had none at all —
        so the only round one in the catalogue was the 6-seater over in Dining,
        which is not what anyone means by a kitchen table. */
-    ['ktable', 'Round table 4p', 100, 100, (g, w, h) => { G.chairs(g, w * .72, h * .72, 1); G.chairs(g, w * .72, h * .72, 1, 'lr'); G.round(g, w); }, 'round circular breakfast bistro kitchen table ronde tafel keukentafel eethoek'],
-    ['ktable2', 'Round table 2p', 70,  70, (g, w, h) => { G.chairs(g, w * .7, h * .7, 1, 'lr'); G.round(g, w); }, 'round circular bistro cafe small breakfast ronde tafel keukentafel'],
+    ['ktable', 'Round table 4p', 100, 100, (g, w) => { G.rchairs(g, w, 4); G.round(g, w); }, 'round circular breakfast bistro kitchen table ronde tafel keukentafel eethoek'],
+    ['ktable2', 'Round table 2p', 70,  70, (g, w) => { G.rchairs(g, w, 2); G.round(g, w); }, 'round circular bistro cafe small breakfast ronde tafel keukentafel'],
   ]],
   ['Bathroom', [
     ['toilet',  'Toilet',      40,  68, (g, w, h) => { rr(g, -w / 2, -h / 2, w, h * .3, 2); g.fill(); g.stroke(); g.beginPath(); g.ellipse(0, h * .12, w / 2, h * .33, 0, 0, 6.2832); g.fill(); g.stroke(); }],
@@ -258,7 +322,7 @@ const RAW: [string, [string, string, number, number, Glyph, string?][]][] = [
     ['stepstone','Stepping stones',60, 240, (g, w, h) => { const n = Math.max(2, Math.round(h / 60)); for (let i = 0; i < n; i++) { g.save(); g.translate((i % 2 ? 1 : -1) * w * .16, -h / 2 + (i + .5) * h / n); g.beginPath(); g.ellipse(0, 0, w * .34, h / n * .3, 0, 0, 6.2832); g.fill(); g.stroke(); g.restore(); } }],
   ]],
   ['Garden extras', [
-    ['gtable',  'Garden table',160, 95, (g, w, h) => { G.chairs(g, w, h, 2); G.chairs(g, w, h, 1, 'lr'); G.table(g, w, h); }],
+    ['gtable',  'Garden table',160, 95, (g, w, h) => { G.chairs(g, w, h, 3); G.table(g, w, h); }],
     ['lounger', 'Lounger',      200, 72, (g, w, h) => { box(g, w, h, 8); g.save(); g.globalAlpha = .4; rr(g, -w / 2, -h / 2, w * .3, h, 6); g.fill(); g.restore(); }],
     ['loungeSet','Lounge set',  260, 230, (g, w, h) => { g.save(); g.setLineDash([8, 6]); box(g, w, h, 6); g.restore(); g.save(); g.globalAlpha = .45; rr(g, -w / 2 + 8, -h / 2 + 8, w - 16, 70, 6); g.fill(); rr(g, -w / 2 + 8, h / 2 - 78, w * .5, 70, 6); g.fill(); g.restore(); }],
     ['parasol', 'Parasol',      270, 270, (g, w) => { g.save(); g.globalAlpha = .22; ci(g, 0, 0, w / 2, 1); g.restore(); g.save(); g.setLineDash([7, 5]); ci(g, 0, 0, w / 2); g.restore(); ci(g, 0, 0, 8); }],
