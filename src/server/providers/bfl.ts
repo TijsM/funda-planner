@@ -1,6 +1,6 @@
 import 'server-only';
 
-/** Black Forest Labs, FLUX.2 [pro] — the whole wire contract, in one place.
+/** Black Forest Labs, FLUX.2 [max] — the whole wire contract, in one place.
  *
  *  Transcribed from BFL's live OpenAPI document, https://api.bfl.ai/openapi.json
  *  (and the matching pages under https://docs.bfl.ai/api-reference), read
@@ -9,7 +9,7 @@ import 'server-only';
  *  below has been proven against a live call yet.
  *
  *  SUBMIT
- *    POST https://api.bfl.ai/v1/flux-2-pro
+ *    POST https://api.bfl.ai/v1/flux-2-max
  *    headers  x-key: <raw key>          — there is no `Authorization: Bearer`
  *                                         form; Bearer answers 403 "Not authenticated"
  *             content-type: application/json
@@ -19,7 +19,8 @@ import 'server-only';
  *             width, height     number   multiple of 16, >= 64, width*height <= 4 MP.
  *                                        FLUX.2 has no aspect_ratio field: the ratio
  *                                        is these two numbers. Billing is per output
- *                                        megapixel, so 1800×1800 costs roughly 3× 1 MP.
+ *                                        megapixel, so 1800×1800 costs roughly 3× 1 MP,
+ *                                        and [max]'s rate is about double [pro]'s.
  *             seed              number | null — null or omitted is random
  *             disable_pup       true     stops BFL's own LLM rewriting the prompt and
  *                                        inventing rooms. pro/max only.
@@ -41,10 +42,19 @@ import 'server-only';
  *    have to be pulled down server-side.
  */
 
-/* One constant, so swapping models is a one-line change. Fallback:
-   'flux-kontext-pro' — documented base64 input, flat $0.04/image, previous
-   generation, and no disable_pup to stop the prompt being rewritten. */
-export const MODEL = 'flux-2-pro';
+/* One constant, so swapping models is a one-line change — but not the only
+   copy of the string: MODEL_LABEL in `src/state/renders.ts` names the model on
+   the record the browser writes, and this file is server-only, so that one has
+   to move in the same commit or a render gets filed under a model that never
+   drew it.
+
+   [max] and [pro] share one request schema upstream (`Flux2Inputs` in
+   api.bfl.ai/openapi.json — same input_image, width/height, seed, disable_pup,
+   safety_tolerance), so everything documented above holds for both and the
+   fallback really is one line. Fallback: 'flux-2-pro' — roughly half the price
+   per output megapixel and half the latency, one tier down on the two things
+   this product is actually buying: editing consistency and prompt adherence. */
+export const MODEL = 'flux-2-max';
 
 const BASE = 'https://api.bfl.ai';
 
@@ -180,8 +190,9 @@ async function httpFailure(res: Response): Promise<ProviderError> {
         ?? 'The image provider rejected the request as malformed but named no field.', false);
     }
     case 429:
-      /* Not a rate limit but a concurrency cap: 24 tasks active at once on
-         flux-2-pro (6 on kontext-max). Waiting for one to settle clears it. */
+      /* Not a rate limit but a concurrency cap: 24 tasks active at once across
+         the account (only kontext-max is lower, at 6). Waiting for one to settle
+         clears it. */
       return new ProviderError(429, 'The provider is at capacity (24 concurrent jobs). Try again in a moment.', true);
     case 500:
     case 502:

@@ -24,7 +24,7 @@ import type { RenderRecord, RenderSettings } from '@shell/renders';
    say which model drew it is a record you cannot reproduce from. */
 export const POLL_TIMEOUT_MS = 180_000;
 export const POLL_TIMEOUT_MESSAGE = 'The render timed out after 3 minutes.';
-export const MODEL_LABEL = 'flux-2-pro';
+export const MODEL_LABEL = 'flux-2-max';
 
 /** One at a time. A double-click on Generate costs a credit per click otherwise,
  *  and there is one preview to show the result in. */
@@ -166,7 +166,7 @@ export const timedOut = (job: RenderJob, now: number): boolean =>
 
 /** Output size for one render, from the reference canvas's own aspect ratio.
  *
- *  flux-2-pro bills per output megapixel, so sending the reference's own
+ *  FLUX.2 bills per output megapixel, so sending the reference's own
  *  1800 px (~3.2 MP) would cost roughly three times a 1 MP render for a picture
  *  nobody asked to be that big. Each side is floored to a multiple of 16 — the
  *  provider rejects anything else, and rounding *up* can push the product past
