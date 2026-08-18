@@ -157,4 +157,83 @@ test.describe('export for an image generator', () => {
     const dl = await Promise.all([page.waitForEvent('download'), page.locator('#aiDlImg').click()]).then(r => r[0]);
     expect(dl.suggestedFilename()).toMatch(/-reference\.png$/);
   });
+
+  test('measurements on the reference image are off, and can be turned on', async ({ page }) => {
+    test.skip(process.env.E2E_TARGET !== 'next', 'v2 shell feature');
+    await importMocked(page);
+    await page.locator('#fchips .fchip').nth(1).click();
+    await page.waitForTimeout(250);
+    await openAI(page);
+
+    /* Off by default. It shipped on, and the lettering it adds — a caption per
+       room, the chains, a labelled scale bar — came back copied into renders as
+       invented dimensions, while the prompt promised the image had no text at
+       all. The toggle stays; the default changed. */
+    await expect(page.locator('#aiImgDims')).not.toBeChecked();
+    await expect(page.locator('.ai-right')).not.toContainText('bleed into the render');
+
+    /* Was a count of dark pixels, on the reasoning that chains and captions are
+       ink and ink only goes up. That stopped holding once the frame excluded the
+       chains: turning measurements on also widens the margin to make room for
+       them, so the plan is drawn smaller inside the same long side and the page
+       comes out *lighter* overall. The honest assertion is that the toggle
+       reaches the reference at all — which the changed size shows. */
+    const size = () => page.evaluate(() => {
+      const img = document.querySelector('#aiImg');
+      return `${img.naturalWidth}x${img.naturalHeight}`;
+    });
+    const plain = await size();
+
+    await page.locator('.tg:has(#aiImgDims)').click();
+    await expect(page.locator('#aiImgDims')).toBeChecked();
+    await page.waitForTimeout(700);
+    /* the warning belongs with the choice, so it appears only once it is made */
+    await expect(page.locator('.ai-right')).toContainText('bleed into the render');
+    expect(await size()).not.toBe(plain);
+  });
+
+  /** The reference is framed on the building, not on its annotation.
+   *
+   *  `contentBBox` counts `f.dims`, so an imported plan whose chains sit a metre
+   *  or more off the walls was framed around the chains: the frame came out much
+   *  wider than the building without coming out taller, the plan sat in a
+   *  letterbox, and the generator filled the spare bands with a title block and
+   *  dimensions it made up.
+   *
+   *  A chain is added four metres clear of the plan rather than relying on the
+   *  fixture's own, whose reach happens to sit inside the furniture's and would
+   *  move the frame by three percent — too little to tell a fix from noise. Out
+   *  here the old behaviour is unmistakable and the new one is a no-op. */
+  test('a dimension chain far outside the plan does not widen the reference', async ({ page }) => {
+    test.skip(process.env.E2E_TARGET !== 'next', 'v2 shell feature');
+    await importMocked(page);
+    await page.locator('#fchips .fchip').nth(1).click();
+    await page.waitForTimeout(250);
+    await openAI(page);
+
+    const size = () => page.evaluate(() => {
+      const img = document.querySelector('#aiImg');
+      return { w: img.naturalWidth, h: img.naturalHeight };
+    });
+    const before = await size();
+
+    const reach = await page.evaluate(() => {
+      const s = window.__ed();
+      const f = s.floor();
+      const xs = f.walls.flatMap(w => [w.a.x, w.b.x]);
+      const ys = f.walls.flatMap(w => [w.a.y, w.b.y]);
+      const x = Math.max(...xs) + 400;                    // 4 m clear of the building
+      const y0 = Math.min(...ys), y1 = Math.max(...ys);
+      f.dims.push({ id: 'e2e-far-chain', a: { x, y: y0 }, b: { x, y: y1 } });
+      s.touch();                                          // bumps rev; the preview redraws
+      return x - Math.max(...xs);
+    });
+    expect(reach).toBe(400);
+    await page.waitForTimeout(700);
+
+    const after = await size();
+    /* Unchanged, not merely similar: the chain is outside everything the picture
+       draws, so it must not move a single pixel of the frame. */
+    expect(after).toEqual(before);
+  });
 });

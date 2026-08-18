@@ -12,3 +12,8 @@ results.json
 
 # macOS
 .DS_Store
+
+
+.env
+# local env — next dev reads .env.local, and it holds the Supabase keys
+.env*.local

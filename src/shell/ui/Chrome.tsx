@@ -1,19 +1,50 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import { ed, useEditor, useEditorShallow } from '@state/store';
 import type { Tool } from '@state/store';
 import { fmtM2, polyArea } from '@engine/geometry';
 import { floorArea } from '@engine/model';
+import { isCloud } from '@data/config';
 import { exportJson, exportPng } from '../files';
-import { saveProject, readIndex, writeMode } from '../storage';
+import { saveProject, writeRendersBar } from '../storage';
+import { libraryList } from '../library';
+import { currentEmail, signOut } from '../account';
 import { addFloor, deleteSelection, removeFloor } from '../commands';
 import { Icon } from './Icons';
 
 export function TopBar() {
-  const { project, simple, dirty } = useEditorShallow(s => ({ project: s.project, simple: s.simple, dirty: s.dirty }));
+  const { project, dirty, rendersOpen, savedId, modal } = useEditorShallow(s => ({
+    project: s.project, dirty: s.dirty, rendersOpen: s.rendersOpen,
+    savedId: s.savedId, modal: s.modal,
+  }));
   const src = project?.source;
 
-  const setMode = (v: boolean) => { writeMode(v); ed().patch({ simple: v, tool: 'select', trayOpen: false }); };
+  /* After mount, never during render. The count comes from localStorage, which
+     the server does not have — so the server sent "" and the client drew "· 2",
+     and React threw a hydration mismatch onto the console for any browser whose
+     library was not empty. Now it also comes from the account, which makes it
+     asynchronous but changes nothing about that rule: still a mount effect,
+     still nothing read while rendering. Re-read when a save lands or the library
+     modal closes, which is all that can change the count. */
+  const [saved, setSaved] = useState(0);
+  useEffect(() => {
+    let live = true;
+    void libraryList().then(l => { if (live) setSaved(l.length); });
+    return () => { live = false; };
+  }, [savedId, modal, dirty]);
+
+  /* `isCloud()` is a build-time literal, identical on the server and in the
+     browser, so branching the markup on it is hydration-safe. The address is
+     not — it comes from the session cookie — so it lands after mount. */
+  const cloud = isCloud();
+  const [email, setEmail] = useState('');
+  useEffect(() => {
+    if (!cloud) return;
+    let live = true;
+    void currentEmail().then(e => { if (live) setEmail(e ?? ''); });
+    return () => { live = false; };
+  }, [cloud]);
 
   return (
     <header className="topbar">
@@ -29,13 +60,9 @@ export function TopBar() {
         : src?.address ? <span id="addrTag">{src.address}</span> : null}
       <div className="spring" />
 
-      {simple && (
-        <>
-          <button className="bigb" id="btnUndo2" title="Undo  (⌘Z)" onClick={() => ed().undoStep()}><Icon id="i-undo" /></button>
-          <button className="bigb" id="btnRedo2" title="Redo  (⇧⌘Z)" onClick={() => ed().redoStep()}><Icon id="i-redo" /></button>
-          <div className="sep" />
-        </>
-      )}
+      <button className="bigb" id="btnUndo2" title="Undo  (⌘Z)" onClick={() => ed().undoStep()}><Icon id="i-undo" /></button>
+      <button className="bigb" id="btnRedo2" title="Redo  (⇧⌘Z)" onClick={() => ed().redoStep()}><Icon id="i-redo" /></button>
+      <div className="sep" />
 
       <button className="btn pri" id="btnImport" onClick={() => ed().patch({ modal: 'import' })}>
         <Icon id="i-link" />Import from Funda
@@ -44,30 +71,50 @@ export function TopBar() {
       <button className="btn" id="btnSave" onClick={() => saveProject()}><Icon id="i-save" />Save</button>
       <button className="btn" id="btnLib" onClick={() => ed().patch({ modal: 'library' })}>
         <Icon id="i-folder" />Library <b className="mono" id="libCount" style={{ color: 'var(--tx-3)', fontWeight: 500 }}>
-          {readIndex().length ? `· ${readIndex().length}` : ''}
+          {saved ? `· ${saved}` : ''}
         </b>
       </button>
       <div className="sep" />
-      {!simple && (
-        <>
-          <button className="btn ghost" id="btnExpJson" title="Export project as .json"
-            onClick={() => project && exportJson(project)}><Icon id="i-dl" />JSON</button>
-          <button className="btn ghost" id="btnImpJson" title="Import a .json project"
-            onClick={() => document.querySelector<HTMLInputElement>('#fileJson')?.click()}><Icon id="i-ul" /></button>
-        </>
-      )}
+      <button className="btn ghost" id="btnExpJson" title="Export project as .json"
+        onClick={() => project && exportJson(project)}><Icon id="i-dl" />JSON</button>
+      <button className="btn ghost" id="btnImpJson" title="Import a .json project"
+        onClick={() => document.querySelector<HTMLInputElement>('#fileJson')?.click()}><Icon id="i-ul" /></button>
       <button className="btn ghost" id="btnExpPng" title="Export current floor as PNG" onClick={exportPng}>
         <Icon id="i-img" />PNG
       </button>
       <button className="btn" id="btnAI" title="Export a prompt + reference image for an image generator"
         onClick={() => ed().patch({ modal: 'render' })}><Icon id="i-spark" />Render</button>
-      <div className="sep" />
-      <div className="modesw">
-        <button id="mSimple" className={simple ? 'on' : ''} title="Meeting mode — big canvas, one Add tray, no panels"
-          onClick={() => setMode(true)}>Simple</button>
-        <button id="mPro" className={!simple ? 'on' : ''} title="Full editor — tool rail, inspector, numeric fields"
-          onClick={() => setMode(false)}>Pro</button>
-      </div>
+      <button
+        className={`btn${rendersOpen ? ' on' : ''}`} id="btnRenders"
+        title="Show the renders made from this plan"
+        onClick={() => { writeRendersBar(!rendersOpen); ed().patch({ rendersOpen: !rendersOpen }); }}
+      ><Icon id="i-img" />Renders</button>
+
+      {cloud && (
+        <>
+          <div className="sep" />
+          <span
+            id="acctMail" className="mono" title={email ? `Signed in as ${email}` : undefined}
+            style={{
+              fontSize: 9.5, color: 'var(--tx-3)', maxWidth: 150,
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}
+          >{email}</span>
+          <button
+            className="btn ghost" id="btnSignOut" title="Sign out of this browser"
+            /* The confirm is not ceremony: signing out clears this browser's
+               copy of the library, and a plan too big to sync only ever existed
+               here. Say that before it happens rather than after. */
+            onClick={() => {
+              if (!confirm(
+                'Sign out? This browser’s copy of your plans is cleared — anything that has not '
+                + 'synced to your account will be gone.',
+              )) return;
+              void signOut();
+            }}
+          >Sign out</button>
+        </>
+      )}
       <span hidden data-dirty={dirty ? '1' : '0'} />
     </header>
   );
@@ -120,7 +167,15 @@ export function FloorBar({ onFit }: { onFit: () => void }) {
           return (
             <button
               key={f.id} className={`fchip${i === floorIndex ? ' on' : ''}`} data-i={i}
+              title="Double-click to rename"
               onClick={() => { ed().setFloorIndex(i); onFit(); }}
+              /* renaming lived in the pro floor list; the chip is the only
+                 place a floor is named now, so it carries it */
+              onDoubleClick={() => {
+                const n = prompt('Floor name', f.name);
+                if (n == null) return;
+                const s = ed(); s.pushUndo(); f.name = n.trim() || f.name; s.touch();
+              }}
             >
               {f.name}{A ? <small>{fmtM2(A)} m²</small> : null}
             </button>
@@ -133,101 +188,23 @@ export function FloorBar({ onFit }: { onFit: () => void }) {
       ><Icon id="i-meas" />Dims</button>
       <button className="fbtn" id="fFit" title="Fit the plan to the screen  (0)" onClick={onFit}><Icon id="i-fit" />Fit</button>
       <button
+        className="fbtn" id="fAddFloor" title="Add a floor above this one"
+        onClick={addFloor}
+      ><Icon id="i-plus" />Floor</button>
+      <button
+        className="fbtn dgr" id="fDelFloor" title="Delete the floor you are on"
+        onClick={() => {
+          const s = ed();
+          const f = s.floor();
+          if (!f || !s.project) return;
+          if (s.project.floors.length < 2) { s.toast('A plan needs at least one floor.', 'err'); return; }
+          if (confirm(`Delete floor “${f.name}” and everything on it?`)) removeFloor(s.floorIndex);
+        }}
+      ><Icon id="i-trash" /></button>
+      <button
         className={`fbtn add${trayOpen ? ' on' : ''}`} id="fAdd"
         onClick={() => ed().patch({ trayOpen: !trayOpen })}
       ><Icon id="i-plus" />Add</button>
     </footer>
-  );
-}
-
-export function StatusBar() {
-  const { sel, gridSize, dirty, savedId, mouseWorld, mouseInside, view } = useEditorShallow(s => ({
-    sel: s.sel, gridSize: s.gridSize, dirty: s.dirty, savedId: s.savedId,
-    mouseWorld: s.mouseWorld, mouseInside: s.mouseInside, view: s.view,
-  }));
-  return (
-    <footer className="statusbar">
-      <div className="st">
-        <i id="stDot" style={{ background: dirty ? 'var(--brass)' : 'var(--moss)' }} />
-        <b id="stMsg">Ready</b>
-      </div>
-      <div className="st">X <b id="stX">{mouseInside ? Math.round(mouseWorld.x) : '—'}</b> · Y <b id="stY">{mouseInside ? Math.round(mouseWorld.y) : '—'}</b></div>
-      <div className="st">Grid <b id="stGrid">{gridSize} cm</b></div>
-      <div className="st" id="stSelWrap" hidden={!sel.length}>Sel <b id="stSel">{sel.length}</b></div>
-      <div className="st last">
-        Zoom {Math.round(view.zoom * 100)}% · Units cm ·{' '}
-        <b id="stSaved">{dirty ? 'unsaved changes' : savedId ? 'saved' : 'not saved'}</b>
-      </div>
-    </footer>
-  );
-}
-
-export function FloorList() {
-  const { project, floorIndex } = useEditorShallow(s => ({ project: s.project, floorIndex: s.floorIndex }));
-  useEditor(s => s.rev);
-  return (
-    <section className="sec">
-      <div className="sec-h">
-        <span className="dot" /><span className="lbl">Floors</span>
-        <button className="btn sm" id="btnAddFloor" onClick={addFloor}><Icon id="i-plus" />Add</button>
-      </div>
-      <div className="sec-b" id="floorList" style={{ padding: 6 }}>
-        {project?.floors.map((f, i) => {
-          const A = f.areas.reduce((s, a) => s + polyArea(a.poly), 0);
-          return (
-            <div
-              key={f.id} className={`floor${i === floorIndex ? ' on' : ''}`} data-i={i}
-              onClick={() => ed().setFloorIndex(i)}
-            >
-              <span className="lv">{f.level}</span>
-              <span
-                className="nm" title="double-click to rename"
-                onDoubleClick={() => {
-                  const n = prompt('Floor name', f.name);
-                  if (n != null) { const s = ed(); s.pushUndo(); f.name = n.trim() || f.name; s.touch(); }
-                }}
-              >{f.name}</span>
-              <span className="ar">{A ? `${fmtM2(A)} m²` : ''}</span>
-              <button
-                className="x" data-del={i} title="Delete floor"
-                onClick={e => {
-                  e.stopPropagation();
-                  if (confirm(`Delete floor “${f.name}” and everything on it?`)) removeFloor(i);
-                }}
-              ><Icon id="i-x" style={{ width: 12, height: 12 }} /></button>
-            </div>
-          );
-        })}
-      </div>
-    </section>
-  );
-}
-
-export function Totals() {
-  const project = useEditor(s => s.project);
-  const floor = useEditor(s => s.floor());
-  useEditor(s => s.rev);
-  if (!project || !floor) return <div className="sec-b" id="totals" />;
-
-  let total = 0, rooms = 0, furn = 0;
-  project.floors.forEach(f => {
-    f.areas.forEach(a => { total += polyArea(a.poly); if (a.name) rooms++; });
-    furn += f.items.filter(i => !i.fromFunda).length;
-  });
-  const line = (k: string, v: string | number, c?: string) => (
-    <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: 11 }}>
-      <span style={{ color: 'var(--tx-3)' }}>{k}</span>
-      <span className="mono" style={{ color: c ?? 'var(--tx)', fontWeight: 500 }}>{v}</span>
-    </div>
-  );
-  return (
-    <div className="sec-b" id="totals" style={{ paddingTop: 8 }}>
-      {line('This floor', `${fmtM2(floorArea(floor))} m²`, 'var(--cyan)')}
-      {line('All floors', `${fmtM2(total)} m²`, 'var(--cyan)')}
-      {line('Named rooms', rooms)}
-      {line('Walls · this floor', floor.walls.length)}
-      {line('Openings', floor.walls.reduce((s, w) => s + w.openings.length, 0))}
-      {line('Furniture placed', furn, 'var(--brass)')}
-    </div>
   );
 }

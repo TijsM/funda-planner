@@ -1,15 +1,16 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ed, useEditor } from '@state/store';
 import { blankProject, contentBBox, floorArea } from '@engine/model';
 import { dist, fmtM2, R2 } from '@engine/geometry';
 import { paint } from '@engine/render';
 import { fitTo } from '@engine/view';
-import type { Project } from '@engine/types';
+import { isCloud } from '@data/config';
 import { importFromSource, importFromUrl, type Step } from '../funda';
 import { readImageFile, readJsonFile, exportJson } from '../files';
-import { clearLibrary, deleteProject, loadProject, readIndex, type LibraryEntry } from '../storage';
+import { libraryList, openPlan, removePlan, wipeLibrary } from '../library';
+import type { LibraryEntry } from '../storage';
 import { Icon } from './Icons';
 
 const close = () => ed().patch({ modal: null, calibrating: false, draft: null });
@@ -145,14 +146,20 @@ export function ImportModal() {
 
 export function LibraryModal() {
   const [idx, setIdx] = useState<LibraryEntry[]>([]);
-  useEffect(() => { setIdx(readIndex()); }, []);
+  const cloud = isCloud();
+  const refresh = useCallback(() => { void libraryList().then(setIdx); }, []);
+  useEffect(() => { refresh(); }, [refresh]);
 
   return (
     <Overlay id="ovLib" wide>
       <div className="m-h">
         <div style={{ flex: 1 }}>
           <h2>Saved plans</h2>
-          <p id="libSub">{idx.length ? `${idx.length} plan(s) stored in this browser` : 'Nothing saved yet'}</p>
+          <p id="libSub">
+            {!idx.length ? 'Nothing saved yet'
+              : cloud ? `${idx.length} plan(s) in your account and this browser`
+              : `${idx.length} plan(s) stored in this browser`}
+          </p>
         </div>
         <button className="m-x" data-close onClick={close}><Icon id="i-x" /></button>
       </div>
@@ -164,26 +171,41 @@ export function LibraryModal() {
             </div>
           )}
           {idx.map(x => (
-            <div className="lib-i" data-id={x.id} key={x.id}>
+            <div className="lib-i" data-id={x.id} data-synced={x.synced ? '1' : '0'} key={x.id}>
               <div className="thumb"><Thumb id={x.id} /></div>
               <div className="meta">
                 <b>{x.name}</b>
-                <span>{x.address ? `${x.address} · ` : ''}{x.nf} floor(s) · {new Date(x.updatedAt).toLocaleString()}</span>
+                <span>
+                  {x.address ? `${x.address} · ` : ''}{x.nf} floor(s) · {new Date(x.updatedAt).toLocaleString()}
+                  {/* "Saved" meaning two different things depending on whether
+                      there is a connection is exactly the ambiguity that loses
+                      someone's work, so the row says which. Only where there is
+                      an account to be in — in local mode every plan is browser-
+                      only and saying so on every row is noise. */}
+                  {cloud ? (x.synced ? ' · in your account' : ' · this browser only') : ''}
+                </span>
               </div>
               <div className="acts">
-                <button className="btn sm" data-act="open" onClick={() => {
-                  const p = loadProject(x.id);
-                  if (!p) { ed().toast('Could not load that plan.', 'err'); return; }
+                <button className="btn sm" data-act="open" onClick={() => { void (async () => {
+                  const p = await openPlan(x.id);
+                  if (!p) {
+                    ed().toast(cloud
+                      ? 'Could not open that plan — this browser has no copy and your account did not answer. Check your connection and try again.'
+                      : 'Could not load that plan.', 'err');
+                    return;
+                  }
                   ed().setProject(p, { saved: true });
                   ed().patch({ modal: null });
                   ed().toast(`Loaded “${p.name}”`, 'ok');
-                }}>Open</button>
+                })(); }}>Open</button>
                 <button className="btn sm" data-act="dl" title="Download as .json" onClick={() => {
-                  const p = loadProject(x.id); if (p) exportJson(p);
+                  void openPlan(x.id).then(p => { if (p) exportJson(p); });
                 }}><Icon id="i-dl" /></button>
                 <button className="btn sm dgr" data-act="del" title="Delete" onClick={() => {
-                  if (!confirm('Delete this saved plan?')) return;
-                  deleteProject(x.id); setIdx(readIndex());
+                  if (!confirm(cloud
+                    ? 'Delete this plan from this browser and from your account?'
+                    : 'Delete this saved plan?')) return;
+                  void removePlan(x.id).then(refresh);
                 }}><Icon id="i-trash" /></button>
               </div>
             </div>
@@ -196,33 +218,44 @@ export function LibraryModal() {
         </button>
         <div className="spring" />
         <button className="btn ghost dgr" id="btnWipe" onClick={() => {
-          if (!confirm('Delete every saved plan in this browser? Exported .json files are unaffected.')) return;
-          clearLibrary(); setIdx([]); ed().toast('Library cleared.', 'ok');
+          if (!confirm(cloud
+            ? 'Delete every saved plan, in this browser and in your account? Your other devices lose them too. Exported .json files are unaffected.'
+            : 'Delete every saved plan in this browser? Exported .json files are unaffected.')) return;
+          setIdx([]);
+          void wipeLibrary().then(() => ed().toast('Library cleared.', 'ok'));
         }}>Clear library</button>
       </div>
     </Overlay>
   );
 }
 
+/* Drawn from the whole document, because there is nowhere else the geometry
+   lives. For a plan this browser already holds that is free; for one that is
+   only in the account it costs a download of the document to paint 56×42 px —
+   accepted because `openPlan` caches what it fetches, so it happens once per
+   plan and the row is warm for opening afterwards. */
 function Thumb({ id }: { id: string }) {
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
-    const cv = ref.current;
-    if (!cv) return;
-    const d = Math.min(window.devicePixelRatio || 1, 2);
-    cv.width = 56 * d; cv.height = 42 * d;
-    const g = cv.getContext('2d');
-    if (!g) return;
-    const p = loadProject(id) as Project | null;
-    const f = p?.floors[0];
-    if (!f) { g.fillStyle = '#E7E2D5'; g.fillRect(0, 0, cv.width, cv.height); return; }
-    const b = contentBBox(f);
-    const view = b ? fitTo(b, 56, 42, 4) : { zoom: 0.05, px: 28, py: 21 };
-    paint(g, {
-      floor: f, view, width: 56, height: 42, dpr: d,
-      layers: { rooms: true, areas: false, furn: true, dims: false, notes: false },
-      grid: false, live: false, vignette: false,
+    let live = true;
+    void openPlan(id).then(p => {
+      const cv = ref.current;
+      if (!live || !cv) return;
+      const d = Math.min(window.devicePixelRatio || 1, 2);
+      cv.width = 56 * d; cv.height = 42 * d;
+      const g = cv.getContext('2d');
+      if (!g) return;
+      const f = p?.floors[0];
+      if (!f) { g.fillStyle = '#E7E2D5'; g.fillRect(0, 0, cv.width, cv.height); return; }
+      const b = contentBBox(f);
+      const view = b ? fitTo(b, 56, 42, 4) : { zoom: 0.05, px: 28, py: 21 };
+      paint(g, {
+        floor: f, view, width: 56, height: 42, dpr: d,
+        layers: { rooms: true, areas: false, furn: true, dims: false, notes: false },
+        grid: false, live: false, vignette: false,
+      });
     });
+    return () => { live = false; };
   }, [id]);
   return <canvas ref={ref} data-th={id} />;
 }

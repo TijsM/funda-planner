@@ -109,8 +109,13 @@ test.describe('files', () => {
     await page.locator('#fchips .fchip').nth(1).click();
     await addFromTray(page, 'sofa3', 700, 420);
     await page.locator('#projName').fill('Rondje json');
-    await page.locator('#mPro').click();
-    await page.waitForTimeout(300);
+    /* The shipped single-file build still has the Simple/Pro switch and keeps
+       its JSON buttons on the Pro side. The v2 shell has one mode and shows
+       them always — so reach for the switch only where one exists. */
+    if (await page.locator('#mPro').count()) {
+      await page.locator('#mPro').click();
+      await page.waitForTimeout(300);
+    }
 
     const dl = await Promise.all([page.waitForEvent('download'), page.locator('#btnExpJson').click()]).then(r => r[0]);
     expect(dl.suggestedFilename()).toBe('rondje-json.plattegrond.json');

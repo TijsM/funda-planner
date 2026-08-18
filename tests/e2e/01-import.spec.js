@@ -4,14 +4,20 @@ import path from 'path';
 import { fresh, S, APP, appUrl, toast, FUNDA_URL, FIXTURES, importMocked, starter, waitFloors, inkRatio, appFailures } from './helpers.js';
 
 test.describe('boot', () => {
-  test('opens in Simple mode with the importer up and no console errors', async ({ page }) => {
+  test('opens with the importer up and no console errors', async ({ page }) => {
     const errors = await fresh(page);
     await page.goto(appUrl());
     await expect(page.locator('#ovImport')).toHaveClass(/open/);
-    await expect(page.locator('#app')).toHaveClass(/simple/);
-    await expect(page.locator('.toolrail')).toBeHidden();
-    await expect(page.locator('.panel.right')).toBeHidden();
     await expect(page.locator('#floorbar')).toBeVisible();
+    /* The v2 shell has one mode: the rail is always out and the panels are gone
+       outright. The shipped build still boots into Simple with both hidden. */
+    if (process.env.E2E_TARGET === 'next') {
+      await expect(page.locator('.toolrail')).toBeVisible();
+      await expect(page.locator('.panel')).toHaveCount(0);
+    } else {
+      await expect(page.locator('.toolrail')).toBeHidden();
+      await expect(page.locator('.panel.right')).toBeHidden();
+    }
     expect(errors).toEqual([]);
     expect(appFailures(page)).toEqual([]);
   });

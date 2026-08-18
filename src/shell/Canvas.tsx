@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import { ed, selectedObjects, useEditor } from '@state/store';
 import { paint } from '@engine/render';
 import {
-  axisLock, handlesFor, hitHandle, snapAngle, snapPoint, toWorld, zoomAt,
+  RESIZE_DIRS, axisLock, cursorForHandle, handlesFor, hitHandle, snapAngle, snapPoint, toWorld, zoomAt,
 } from '@engine/view';
 import { hitTest, nearestWall } from '@engine/hit';
 import { closestOnSeg, clamp, dist, R2, rotPt } from '@engine/geometry';
@@ -272,7 +272,7 @@ export function Canvas() {
     if (s.tool !== 'select') return;
 
     const h = hitHandle(handlesFor(selectedObjects(s), s.view), sp);
-    if (ref.current) ref.current.style.cursor = h ? (h.k === 'rot' ? 'grab' : 'nwse-resize') : 'default';
+    if (ref.current) ref.current.style.cursor = cursorForHandle(h);
     const hv = h ? null : hitTest(s.floor(), wp, s.view, s.layers);
     const key = hv ? `${hv.t}:${hv.o.id}` : '';
     const prev = s.hover ? `${s.hover.t}:${s.hover.o.id}` : '';
@@ -353,15 +353,27 @@ export function Canvas() {
     } else if (h.k === 'res') {
       const o = h.o as Item;
       const g = JSON.parse(d.orig) as Item;
-      const co = [[-1, -1], [1, -1], [1, 1], [-1, 1]][h.i!];
+      const co = h.dir ?? RESIZE_DIRS[h.i!];
+      /* The anchor is the opposite corner — or, on a side handle, the opposite
+         side: the zero component puts it on the centre line, which is exactly
+         what keeps that axis from moving. */
       const opp = { x: (-co[0] * g.w) / 2, y: (-co[1] * g.h) / 2 };
       const m = rotPt(wp.x - g.x, wp.y - g.y, -(g.rot || 0));
-      let nw = Math.max(4, (m.x - opp.x) * co[0]);
-      let nh = Math.max(4, (m.y - opp.y) * co[1]);
-      if (e.shiftKey) { const k = Math.max(nw / g.w, nh / g.h); nw = g.w * k; nh = g.h * k; }
+      /* A side handle leaves its idle axis at the size it already was. Running
+         it through the same max(4, …) as a corner would collapse it to 4 cm. */
+      let nw = co[0] ? Math.max(4, (m.x - opp.x) * co[0]) : g.w;
+      let nh = co[1] ? Math.max(4, (m.y - opp.y) * co[1]) : g.h;
+      if (e.shiftKey) {
+        /* Shift keeps the proportions. A corner takes whichever axis was pulled
+           furthest; a side has only one axis to go on. */
+        const k = co[0] && co[1] ? Math.max(nw / g.w, nh / g.h) : co[0] ? nw / g.w : nh / g.h;
+        nw = g.w * k; nh = g.h * k;
+      }
       if (s.snap && !e.altKey) {
-        nw = Math.max(4, Math.round(nw / s.gridSize) * s.gridSize);
-        nh = Math.max(4, Math.round(nh / s.gridSize) * s.gridSize);
+        /* Only the axes this handle drives. Snapping the idle one would nudge a
+           side-dragged object whose other dimension is not already on the grid. */
+        if (co[0]) nw = Math.max(4, Math.round(nw / s.gridSize) * s.gridSize);
+        if (co[1]) nh = Math.max(4, Math.round(nh / s.gridSize) * s.gridSize);
       }
       const nc = { x: opp.x + (co[0] * nw) / 2, y: opp.y + (co[1] * nh) / 2 };
       const wc = rotPt(nc.x, nc.y, g.rot || 0);

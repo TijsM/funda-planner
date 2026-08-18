@@ -33,8 +33,11 @@ Two consequences worth planning around:
 
 ### Layout
 
+Written as `lib/…` when this was planned; it landed under `src/…` with the path aliases
+`@engine/*`, `@shell/*`, `@state/*`, `@data/*`, `@server/*`.
+
 ```
-lib/engine/            pure TS — no React, no DOM, no fetch
+src/engine/            pure TS — no React, no DOM, no fetch
   model.ts             types, factories, migrate()
   geometry.ts          polyArea, pointInPoly, snapping, hit-testing
   catalog.ts           the 120 objects + their draw functions
@@ -42,10 +45,13 @@ lib/engine/            pure TS — no React, no DOM, no fetch
   prompt.ts            buildPrompt(), planFacts()
   io/funda.ts          parseFundaSource(), fmlToProject()
   io/serialize.ts      import/export, versioned migrations
-app/                   Next.js routes: marketing, auth, dashboard, /plan/[id]
-components/            React shell: tray, toolbars, inspector, modals
-components/Canvas.tsx  thin wrapper — refs + pointer events → engine
-server/                DB access, entitlements, providers
+src/shell/             React shell: tray, toolbars, inspector, modals, storage
+src/shell/Canvas.tsx   thin wrapper — refs + pointer events → engine
+src/state/             the Zustand store the canvas subscribes to
+src/data/              Supabase in the browser: config, schema, plan sync, renders
+src/server/            server-only: per-request client, the gate, providers
+app/                   Next routes: the editor, /login, /api/render
+supabase/migrations/   tables, RLS policies, the render bucket
 ```
 
 **Do not put the document in React state.** A `<canvas>` repainting 183 walls through React
@@ -59,23 +65,53 @@ repaints imperatively. React owns chrome only.
 | Concern | Choice | Why this one |
 |---|---|---|
 | Framework | **Next.js (App Router) + TypeScript**, Vercel | You need a server for API keys, Stripe webhooks and the Funda fetch. One deployable, best ecosystem for exactly these three problems. |
-| Auth + teams | **Clerk** | Organisations, invites and roles out of the box. Rebuilding org membership is weeks of work with no product value. |
-| Database | **Postgres (Neon) + Drizzle** | Plans are ~64 KB of JSON → one `jsonb` column. Drizzle stays close to SQL and keeps bundles small. Neon branching pairs with preview deploys. |
+| Auth | **Supabase Auth**, email OTP — *shipped* | No password in the system at all: an address, a six-digit code, done. Teams are not built; every RLS policy is `owner_id = auth.uid()` and that predicate is the one thing that changes when they are. |
+| Database | **Supabase Postgres + supabase-js** — *shipped* | Plans are ~64 KB of JSON → one `jsonb` column, as planned. No ORM: with RLS doing the authorisation, the query layer is thin enough that a hand-written `Database` type (`src/data/schema.ts`) beats a migration toolchain the browser half cannot use anyway. |
 | Billing | **Stripe**, or a merchant of record — see below | Checkout + Customer Portal. Never build billing UI. |
-| Object storage | **Cloudflare R2** (or Supabase Storage) | Reference images, generated renders, uploaded bitmaps. Signed URLs. |
+| Object storage | **Supabase Storage**, private `renders` bucket — *shipped* | Generated renders, keyed `<owner-uuid>/<render-uuid>.png` so the bucket policies authorise on the first path segment alone. Signed URLs, one hour. |
 | Server canvas | **@napi-rs/canvas** | Runs `render.ts` unchanged. |
 | Jobs | Start with a job row + polling; **Inngest** when it hurts | Renders take 10–60 s — too long for a request. |
 | Tests | **Vitest** (engine) + **Playwright** (flows) | The existing suite and fixtures carry over. |
 
+### Why it stopped being three vendors
+
+Clerk for auth, Neon for Postgres and R2 for objects is three dashboards, three sets of credentials
+and, worse, three seams: Clerk users mirrored into Neon by webhook, and object keys authorised by
+code we write rather than by the database. Supabase collapses all three into one platform where the
+*same* `auth.uid()` that identifies the request is the predicate in the row policies and in the
+Storage policies — so "can this person read this?" is answered in one place, by the database, and a
+route handler that forgets to check cannot leak anything. That is worth more here than Clerk's
+organisations, which nothing yet needs.
+
+The cost is honest: one vendor, and no org/invite/role model to inherit when teams arrive.
+
 ### Schema sketch
 
+Shipped, in `supabase/migrations/20260816120000_init.sql`, mirrored as types in
+`src/data/schema.ts`:
+
 ```
-orgs, users              mirrored from Clerk by webhook
-plans                    id, org_id, owner_id, name, source_url, funda_project_id,
-                         doc jsonb, updated_at
+profiles                 id (= auth.users.id), email — filled by trigger on signup
+plans                    id, owner_id, client_id, name, address, source_url,
+                         funda_project_id, floor_count, doc jsonb,
+                         doc_updated_at, synced_at, deleted_at
+renders                  id, owner_id, plan_id, client_id, floor_id, parent_id,
+                         prompt, settings jsonb, seed, model, status, error,
+                         provider_job_id, provider_poll_url,
+                         image_path, thumb_path, bytes, width, height, duration_ms
+```
+
+`client_id` on both is the editor's own id, kept because every document, every exported `.json` and
+every render already references plans by it; `id` is a real uuid because a key generated by
+`Math.random()` with no collision check is not one. `doc_updated_at` is the client's clock, not
+`now()` — it is the last-write-wins key, and the editor has to be able to decide which of two
+versions is newer while offline.
+
+Still sketches, for the steps below:
+
+```
+orgs, memberships        when teams land — the one place owner_id becomes a join
 plan_versions            id, plan_id, doc jsonb, created_at, created_by
-renders                  id, plan_id, prompt, provider, model, image_url,
-                         status, cost_cents
 subscriptions            org_id, stripe_customer_id, price_id, status, seats
 usage_events             org_id, kind ('render' | 'import'), qty, created_at
 ```
@@ -87,18 +123,27 @@ this?". Every route calls it. Never scatter plan checks.
 
 ## AI rendering
 
-Keys never reach the browser. The flow:
+Keys never reach the browser. What shipped:
 
 ```
-POST /api/renders
-  → entitlements + quota check
-  → buildPrompt(doc, opts)          lib/engine/prompt.ts
-  → paint() to a server canvas      lib/engine/render.ts + @napi-rs/canvas
-  → provider.generate(prompt, referenceImage)
-  → store to R2, insert `renders`
+POST /api/render                      app/api/render/route.ts
+  → session (Supabase) → 401 if none
+  → the plan's row, by client_id      409 if it has not synced yet
+  → submit to BFL                     src/server/providers/bfl.ts
+  → insert `renders`, status pending, provider_poll_url on the row
+  → { renderId, jobId }               no poll URL — that is the point
+
+GET /api/render/status?renderId=
+  → poll the provider with the URL FROM THE ROW
+  → ready: download the PNG, put it in the private bucket, settle the row,
+           answer with a signed URL
 ```
 
-Put providers behind one adapter (`server/providers/*.ts`) and start with a single one. For
+The server canvas is the one piece of the plan that did not happen: `paint()` runs in the browser
+and the reference image arrives as base64, capped at 6 MB. `@napi-rs/canvas` becomes worth adding
+the day a render is started by something other than an open tab.
+
+Put providers behind one adapter (`src/server/providers/*.ts`) and start with a single one. For
 "make this exact plan photoreal", image-conditioned models matter more than raw quality — Gemini's
 image models and Flux (via fal or Replicate) both take an image plus text. If structural fidelity
 disappoints, add ControlNet-style conditioning rather than fighting the prompt.
@@ -137,10 +182,15 @@ Each step ships and leaves the app working.
    The static app on `main` keeps serving users.
 2. **Editor shell in React.** Canvas wrapper, tray, toolbars, inspector. Repoint the Playwright
    suite; keep the fixtures.
-3. **Auth + persistence.** Clerk, Neon, plans in Postgres. Keep localStorage as an offline cache so
-   the thing still works on a train.
+3. **Auth + persistence — done.** Supabase rather than Clerk + Neon, for the reason above. Email
+   OTP, plans in Postgres under RLS, renders in a private bucket, and localStorage still written
+   synchronously on every save so the thing works on a train. Setting one up:
+   [`SUPABASE.md`](SUPABASE.md).
 4. **Billing.** Checkout, portal, webhooks, `entitlements()`, quotas.
-5. **Renders.** Server canvas, provider adapter, job row, gallery per plan.
+5. **Renders — done**, apart from the server canvas. Provider adapter, a row per render, lineage
+   and re-runs, a filmstrip per floor. Steps 3 and 5 landed in the other order than written here:
+   renders shipped first against IndexedDB and one shared password, and step 3 moved them into the
+   account.
 
 ## Deliberately not doing
 
@@ -166,9 +216,11 @@ them so far:
 
 Two that will bite during the steps above:
 
-- **`middleware` is renamed to `proxy`.** Clerk's auth guard is normally a
+- **`middleware` is renamed to `proxy`.** Every guide writes the auth guard as a
   `middleware.ts`; on 16 that file is `proxy.ts` exporting `proxy`, and it runs on
-  the Node runtime only — the `edge` runtime is not supported there.
+  the Node runtime only — the `edge` runtime is not supported there. That is where
+  the gate now lives, and where the Supabase session gets refreshed on every
+  request, so an early return there silently skips the refresh.
 - **Request APIs are async.** `params`, `searchParams`, `cookies()` and `headers()`
   must be awaited. Nothing in the editor touches them yet, but every route added
   for billing, renders and the Funda proxy will.

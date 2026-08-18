@@ -1,7 +1,7 @@
-import type { Area, Floor, Item, Pt, Project } from './types';
-import { clamp, compass, polyArea, polyCentroid, pointInPoly, unitNormal } from './geometry';
-import { CAT_BY_KIND } from './catalog';
-import { labelOf, shellBBox } from './model';
+import type { Area, BBox, Floor, Item, Pt, Project } from './types';
+import { bearing, compass, polyArea, polyCentroid, pointInPoly, unitNormal } from './geometry';
+import { CAT_BY_KIND, SEATS } from './catalog';
+import { descOf, labelOf, shellBBox } from './model';
 
 export type ViewKind = 'top' | 'eye' | 'iso' | 'sketch';
 
@@ -22,7 +22,15 @@ export interface PlanFacts {
   doors: number;
   windowSides: [string, number][];
   w: number; h: number;
+  /** the building's own bounds, so positions can be phrased against it */
+  bbox: BBox;
+  /** fitted objects still carrying no name at all — geometry with no meaning */
+  anonFitted: number;
   total: number;
+  /** Do the drawn room polygons actually account for the building? When they do
+   *  not, `total` is a fraction of the real floor and must not be presented as
+   *  its area — an unmapped open plan reported 1.9 m² inside a 74 m² footprint. */
+  mapped: boolean;
   notes: string[];
 }
 
@@ -45,10 +53,16 @@ export function planFacts(f: Floor): PlanFacts {
       };
     });
 
+  /* Fitted objects imported from the listing arrive anonymous — the .fml carries
+     no names, only geometry — and dozens of unnamed boxes would flood the brief.
+     But one the user has named or described is the opposite of noise: a staircase
+     left out of the text is how a render grows a corridor that is not there. */
+  const speaks = (i: Item) => !i.fromFunda || !!descOf(i) || !!labelOf(i).trim();
+
   const used = new Set<string>();
   rooms.forEach(r => {
     r.items = f.items.filter(i => {
-      if (used.has(i.id) || i.fromFunda) return false;
+      if (used.has(i.id) || !speaks(i)) return false;
       if (!pointInPoly({ x: i.x, y: i.y }, r.a.poly)) return false;
       used.add(i.id);
       return true;
@@ -57,26 +71,42 @@ export function planFacts(f: Floor): PlanFacts {
   });
 
   const windows: string[] = [], doors: string[] = [];
-  f.walls.forEach(w => w.openings.forEach(o => {
+  const mid = { x: (b.x0 + b.x1) / 2, y: (b.y0 + b.y1) / 2 };
+  f.walls.forEach(w => {
+    if (!w.openings.length) return;
+    /* Which way the wall faces, not where the opening sits along it. Tallying
+       the opening's own octant made a run of windows across one elevation come
+       back as two diagonals, so a plain rectangle reported all four — which
+       says nothing about where the light comes from. */
     const n = unitNormal(w.a, w.b);
-    const t = clamp(o.at, 0, 1) * n.L;
-    const p = { x: w.a.x + n.ux * t, y: w.a.y + n.uy * t };
-    (o.type === 'window' ? windows : doors).push(compass(p, b));
-  }));
+    const c = { x: (w.a.x + w.b.x) / 2, y: (w.a.y + w.b.y) / 2 };
+    const out = (c.x - mid.x) * n.x + (c.y - mid.y) * n.y < 0 ? -1 : 1;
+    const dir = bearing(n.x * out, n.y * out);
+    w.openings.forEach(o => (o.type === 'window' ? windows : doors).push(dir));
+  });
   const tally = (arr: string[]): [string, number][] => {
     const c: Record<string, number> = {};
     arr.forEach(s => { c[s] = (c[s] || 0) + 1; });
     return Object.entries(c).sort((a, b2) => b2[1] - a[1]);
   };
 
+  const total = f.areas.reduce((s, a) => s + polyArea(a.poly), 0);
+  const footprint = Math.max(1, (b.x1 - b.x0) * (b.y1 - b.y0));
+
   return {
     rooms,
-    loose: f.items.filter(i => !used.has(i.id) && !i.fromFunda),
+    /* top-to-bottom, then left-to-right: the order a person reads a plan out loud */
+    loose: f.items
+      .filter(i => !used.has(i.id) && speaks(i))
+      .sort((p, q) => (p.y - q.y) || (p.x - q.x)),
+    bbox: b,
+    anonFitted: f.items.filter(i => i.fromFunda && !speaks(i)).length,
     doors: doors.length,
     windowSides: tally(windows),
     w: (b.x1 - b.x0) / 100,
     h: (b.y1 - b.y0) / 100,
-    total: f.areas.reduce((s, a) => s + polyArea(a.poly), 0),
+    total,
+    mapped: total >= footprint * 0.55,
     notes: f.notes
       .map(n => String(n.text).replace(/\s+/g, ' ').trim())
       .filter(t => t && !/geen rechten|©|zibber/i.test(t)),
@@ -102,6 +132,53 @@ export const AI_VIEWS: Record<ViewKind, { lead: string; cam: string }> = {
   },
 };
 
+/** Close the user's free text off, so it cannot run into the generated prose
+ *  that follows it on the same line. */
+function sentence(s: string): string {
+  return /[.!?;:]$/.test(s) ? s : `${s}.`;
+}
+
+/** `sofa (225×95 cm) — dark green velvet, low back`
+ *
+ *  Descriptions are free text and routinely contain commas, so a comma-joined
+ *  list stops being parseable the moment one is written. Switch to semicolons
+ *  only then — a plan with no descriptions reads exactly as it did before. */
+function itemList(items: Item[], dim: boolean): string {
+  const parts = items.map(i => {
+    const nm = labelOf(i).toLowerCase() || 'object';
+    const d = descOf(i);
+    return (dim ? `${nm} (${Math.round(i.w)}×${Math.round(i.h)} cm)` : nm) + (d ? ` — ${d}` : '');
+  });
+  return parts.join(items.some(i => descOf(i)) ? '; ' : ', ');
+}
+
+/** Where a thing sits, phrased against the attached top-down drawing rather than
+ *  in metres — "top-left" lands on the image, "x = 240 cm" does not. Objects
+ *  pressed up against an elevation say so, because that is what stops a model
+ *  floating a fireplace into the middle of the floor. */
+export function placeOf(i: Item, b: BBox): string {
+  const w = Math.max(1, b.x1 - b.x0), h = Math.max(1, b.y1 - b.y0);
+  const fx = (i.x - b.x0) / w, fy = (i.y - b.y0) / h;
+  const band = (t: number, lo: string, mid: string, hi: string) => (t < 1 / 3 ? lo : t > 2 / 3 ? hi : mid);
+  const vert = band(fy, 'upper', 'middle', 'lower');
+
+  /* against a wall: measured in centimetres, since a fraction of a 12 m plan is
+     a metre and a half and would call half the floor "against the wall" */
+  const reach = 90;
+  if (i.x - b.x0 < reach) return `against the left wall, ${vert}`;
+  if (b.x1 - i.x < reach) return `against the right wall, ${vert}`;
+  const horiz = band(fx, 'left', 'centre', 'right');
+  if (i.y - b.y0 < reach) return `against the top wall, ${horiz}`;
+  if (b.y1 - i.y < reach) return `against the bottom wall, ${horiz}`;
+
+  const row = band(fy, 'top', 'middle', 'bottom');
+  const col = band(fx, 'left', 'centre', 'right');
+  return row === 'middle' && col === 'centre' ? 'the middle of the floor' : `${row}-${col}`;
+}
+
+/** A staircase read as anonymous geometry is how a plan grows a corridor. */
+const STAIRS = /stair|trap\b/i;
+
 export function buildPrompt(project: Project, f: Floor, opts: PromptOpts): string {
   const F = planFacts(f);
   const V = AI_VIEWS[opts.view] ?? AI_VIEWS.top;
@@ -116,7 +193,9 @@ export function buildPrompt(project: Project, f: Floor, opts: PromptOpts): strin
   L.push('SUBJECT');
   L.push(only
     ? `The ${only.name} of ${addr}${dim ? ` — ${(only.area / 10000).toFixed(1)} m²` : ''}, on the ${f.name.toLowerCase()}.`
-    : `${addr} — "${f.name}"${dim ? `, ${(F.total / 10000).toFixed(1)} m² over ${F.rooms.length} named rooms, overall footprint ${F.w.toFixed(1)} × ${F.h.toFixed(1)} m` : ''}.`);
+    : `${addr} — "${f.name}"${dim ? `, ${F.mapped
+      ? `${(F.total / 10000).toFixed(1)} m² over ${F.rooms.length} named room${F.rooms.length === 1 ? '' : 's'}, overall footprint `
+      : 'overall footprint '}${F.w.toFixed(1)} × ${F.h.toFixed(1)} m` : ''}.`);
   L.push('North is at the top of the plan.', '');
 
   L.push(only ? 'THE ROOM' : 'LAYOUT — reproduce exactly, do not invent or omit rooms');
@@ -124,13 +203,13 @@ export function buildPrompt(project: Project, f: Floor, opts: PromptOpts): strin
     const bits = [r.name];
     if (dim) bits.push(`${(r.area / 10000).toFixed(1)} m²`);
     if (!only) bits.push(r.where);
-    let line = `- ${bits.join(', ')}.`;
+    const rd = descOf(r.a);
+    /* an em-dash clause, the same convention the object list uses — and it
+       avoids capitalising whatever word the user happened to start with */
+    let line = rd ? `- ${bits.join(', ')} — ${sentence(rd)}` : `- ${bits.join(', ')}.`;
     if (opts.furniture) {
       if (r.items.length) {
-        line += ' Contains: ' + r.items.map(i => {
-          const nm = labelOf(i).toLowerCase() || 'object';
-          return dim ? `${nm} (${Math.round(i.w)}×${Math.round(i.h)} cm)` : nm;
-        }).join(', ') + '.';
+        line += ' Contains: ' + itemList(r.items, dim) + '.';
       } else if (r.fitted) {
         line += ' Fitted units already in place (as drawn); no loose furniture.';
       } else {
@@ -140,14 +219,61 @@ export function buildPrompt(project: Project, f: Floor, opts: PromptOpts): strin
     L.push(line);
   });
   if (!only && opts.furniture && F.loose.length) {
-    L.push('- Elsewhere on the floor: '
-      + F.loose.map(i => labelOf(i).toLowerCase() || 'object').join(', ') + '.');
+    /* One line per object, each with where it actually is. A comma-separated bag
+       of nouns leaves placement entirely to the model, which then moves things. */
+    L.push('', 'OBJECTS — each one is already placed; keep it where the plan puts it');
+    F.loose.forEach(i => {
+      const nm = labelOf(i).toLowerCase() || 'object';
+      const d = descOf(i);
+      const size = dim ? ` (${Math.round(i.w)}×${Math.round(i.h)} cm)` : '';
+      L.push(`- ${placeOf(i, F.bbox)}: ${nm}${size}.${d ? ` ${sentence(d)}` : ''}`);
+    });
+  }
+  /* Said once, wherever the stair happens to be listed — inside a named room or
+     out on the floor. An unexplained stair-shaped block is what a render turns
+     into a corridor that does not exist. */
+  if (opts.furniture && rooms.flatMap(r => r.items).concat(only ? [] : F.loose)
+    .some(i => STAIRS.test(labelOf(i)))) {
+    L.push('', 'The staircase goes up to the floor above: draw it as an enclosed run of'
+      + ' steps, not as furniture and not as a corridor.');
+  }
+  /* The chairs are on the plan, drawn and counted, and the model was reading
+     them as decoration: a six-seater came back with eight seats because the
+     reference had eight blobs round it and nothing in the text said the blobs
+     were furniture with a number. Say both — what they are, and that the count
+     is the drawing's, not the model's to round up. */
+  const seated = rooms.flatMap(r => r.items).concat(only ? [] : F.loose).filter(i => SEATS[i.kind]);
+  if (opts.furniture && seated.length) {
+    const total = seated.reduce((n, i) => n + SEATS[i.kind], 0);
+    L.push('', `The small squares drawn around every table are chairs — ${total} of them across`
+      + ` ${seated.length} table${seated.length === 1 ? '' : 's'}. Reproduce exactly the number drawn`
+      + ' at each table, in the positions drawn: chairs sit along the sides that have them and'
+      + ' nowhere else, and a table with no chair at its head does not get one.');
+  }
+  /* Outside the block above on purpose: a floor can consist of nothing but
+     anonymous fitted blocks, and that is precisely when this needs saying. */
+  if (!only && opts.furniture && F.anonFitted) {
+    L.push('', `${F.anonFitted} unnamed fitted block${F.anonFitted === 1 ? ' is' : 's are'} drawn on the plan`
+      + ' — kitchen units, sanitary ware, built-in joinery. Reproduce them as built-in cabinetry'
+      + ' against the wall they touch. They are never open floor, a passage or a corridor.');
+  }
+  /* The descriptions are the one part of this brief a person actually wrote —
+     say so, or the model treats them as flavour text alongside the geometry. */
+  const listed = rooms.flatMap(r => r.items).concat(only ? [] : F.loose);
+  if (rooms.some(r => descOf(r.a)) || (opts.furniture && listed.some(i => descOf(i)))) {
+    L.push('');
+    L.push('These are deliberate instructions from the person who drew the plan, '
+      + 'not suggestions: reproduce every described room and object as described.');
   }
   L.push('');
 
   if (!only) {
     L.push('OPENINGS AND LIGHT');
-    if (F.windowSides.length) {
+    if (F.windowSides.length >= 5) {
+      /* A list of six or seven compass points is the same as saying nothing —
+         state the fact instead of enumerating it. */
+      L.push('Glazing on nearly every elevation — even daylight from all around.');
+    } else if (F.windowSides.length) {
       const many = F.windowSides.some(([, n]) => n > 1);
       const sides = F.windowSides.map(([s, n]) => (many ? `${s} (${n})` : s));
       const list = sides.length > 1 ? `${sides.slice(0, -1).join(', ')} and ${sides[sides.length - 1]}` : sides[0];
@@ -158,7 +284,20 @@ export function buildPrompt(project: Project, f: Floor, opts: PromptOpts): strin
     L.push(`${F.doors} doorway${F.doors === 1 ? '' : 's'} connect the rooms. Do not add windows or doors that are not listed.`, '');
   }
 
-  if (opts.style?.trim()) L.push('STYLE', opts.style.trim(), '');
+  if (opts.style?.trim()) {
+    /* A heading with the user's two words under it was being read as flavour
+       text and losing to the RENDER block right below, which asserts daylight
+       and realistic materials whatever anyone typed. What was missing is a
+       verb and a scope: name what the style governs, and — since it is the one
+       instruction that could be mistaken for permission to redecorate the
+       plan — say what it does not. */
+    L.push('STYLE — governs every material, colour, finish, fitting and light in the image');
+    L.push(sentence(opts.style.trim()));
+    L.push('Apply it consistently across the whole floor, to the fitted units and the flooring'
+      + ' as much as the loose furniture. It changes how the space looks, never what is in it'
+      + ' or where: the layout above still wins.');
+    L.push('');
+  }
   if (F.notes.length) {
     L.push('NOTES FROM THE PLAN');
     F.notes.slice(0, 8).forEach(n => L.push(`- ${n}`));

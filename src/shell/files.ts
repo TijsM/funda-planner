@@ -1,6 +1,7 @@
 import type { Floor, Layers, Project } from '@engine/types';
-import { contentBBox, floorArea } from '@engine/model';
+import { contentBBox, floorArea, shellBBox } from '@engine/model';
 import { fmtM2, R2 } from '@engine/geometry';
+import { planFacts } from '@engine/prompt';
 import { paint } from '@engine/render';
 import { parseProject, serializeProject, slug } from '@engine/io/serialize';
 import { ed } from '@state/store';
@@ -8,7 +9,10 @@ import { ed } from '@state/store';
 /** Browser file plumbing: downloads, file reads, and rendering the canvas to a
  *  bitmap. The drawing itself is the engine's paint(); only the plumbing is here. */
 
-function download(blob: Blob, filename: string) {
+/** Hands bytes to the browser as a file. Exported because the render workspace
+ *  needs the same three lines for every stored PNG, and a third copy of them is
+ *  a third place for the revoke to be forgotten. */
+export function download(blob: Blob, filename: string) {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = filename;
@@ -55,14 +59,64 @@ export function readImageFile(file: File, onDone?: () => void) {
  *  strips everything that would confuse an image generator. */
 export function renderFloorCanvas(
   f: Floor,
-  opts: { clean?: boolean; furniture?: boolean; roomLabels?: boolean; maxPx?: number; layers?: Layers } = {},
+  opts: {
+    clean?: boolean; furniture?: boolean; roomLabels?: boolean; maxPx?: number;
+    layers?: Layers; measures?: boolean;
+  } = {},
 ): HTMLCanvasElement | null {
-  const b = contentBBox({ ...f, notes: opts.clean ? [] : f.notes, ref: null });
+  /* A measured print frames the building, not its annotation. Floorplanner's own
+     dimension chains sit metres off the walls, and letting them set the bounds
+     rendered the plan at half the scale it could be — which is why everything
+     came out small and the chains looked scattered. So keep only annotation that
+     sits against the building, and drop what is stranded out in the margin: the
+     chains this renderer draws now say the same thing, closer in. A measure line
+     the user placed themselves is next to what it measures, so it survives. */
+  let framed = f;
+  if (opts.measures) {
+    const bb = contentBBox({ ...f, dims: [], lines: [], notes: [], ref: null });
+    if (bb) {
+      const m = 130;                                    // cm of slack, about a wall's reach
+      const near = (p: { x: number; y: number }) =>
+        p.x >= bb.x0 - m && p.x <= bb.x1 + m && p.y >= bb.y0 - m && p.y <= bb.y1 + m;
+      framed = {
+        ...f,
+        dims: f.dims.filter(d => near(d.a) && near(d.b)),
+        lines: f.lines.filter(l => near(l.a) && near(l.b)),
+        /* the same rule catches the "© Zibber" boilerplate the .fml ships,
+           which sits a couple of metres under the plan and stretched the page */
+        notes: f.notes.filter(n => near(n)),
+      };
+    }
+  }
+  /* Frame on what will actually be drawn, and nothing else. A clean reference
+     hides the dimension chains and the notes (`layers.dims`/`notes` are false
+     below), so counting them here framed the picture around ink that is not in
+     it — and an imported plan's chains sprawl a metre past the walls, which made
+     the frame much wider than the building without making it taller. The plan
+     then sat in a letterbox, and the generator filled the spare bands with an
+     invented title block and captions of its own. Symmetric with `notes`, which
+     was already excluded for exactly this reason. */
+  const b = contentBBox({
+    ...framed,
+    notes: opts.clean ? [] : framed.notes,
+    dims: opts.clean ? [] : framed.dims,
+    ref: null,
+  });
   if (!b) return null;
-  const pad = opts.clean ? 40 : 70;
-  const wCm = b.x1 - b.x0 + pad * 2;
-  const hCm = b.y1 - b.y0 + pad * 2;
-  const zoom = Math.max(0.15, Math.min((opts.maxPx ?? 3600) / Math.max(wCm, hCm), 6));
+  const maxPx = opts.maxPx ?? 3600;
+  const fit = (pad: number) => {
+    const wCm = b.x1 - b.x0 + pad * 2;
+    const hCm = b.y1 - b.y0 + pad * 2;
+    return { wCm, hCm, zoom: Math.max(0.15, Math.min(maxPx / Math.max(wCm, hCm), 6)) };
+  };
+
+  /* The dimension chains are drawn at a fixed pixel offset, so the margin has
+     to be a fixed number of pixels too — which means solving for it once the
+     scale is known, rather than picking a distance in centimetres. */
+  let pad = opts.clean ? 40 : 70;
+  if (opts.measures) pad = Math.max(pad, 88 / fit(pad).zoom);
+  const { wCm, hCm, zoom } = fit(pad);
+
   const cv = document.createElement('canvas');
   cv.width = Math.round(wCm * zoom);
   cv.height = Math.round(hCm * zoom);
@@ -74,12 +128,19 @@ export function renderFloorCanvas(
     : ed().layers);
 
   paint(ctx, {
-    floor: f,
+    floor: framed,
     view: { zoom, px: (-b.x0 + pad) * zoom, py: (-b.y0 + pad) * zoom },
     width: cv.width, height: cv.height,
     dpr: 1, layers, grid: false, live: false,
     roomLabels: opts.roomLabels !== false,
     vignette: false,
+    measures: opts.measures,
+    /* The generator reference must carry no lettering at all — the prompt tells
+       the model there is none, and a label bleeds through into the render. */
+    objectLabels: !opts.clean,
+    hatchFixtures: !opts.clean,
+    /* the renderer's sizes are tuned for a screen canvas; a print is 3-4× that */
+    textScale: Math.max(1, Math.min(cv.width, cv.height) / 900),
   });
   return cv;
 }
@@ -88,7 +149,7 @@ export function exportPng() {
   const s = ed();
   const f = s.floor();
   if (!f || !s.project) return;
-  const cv = renderFloorCanvas(f, { maxPx: 3600 });
+  const cv = renderFloorCanvas(f, { maxPx: 3600, measures: true });
   if (!cv) { s.toast('Nothing to export on this floor.', 'err'); return; }
   const ctx = cv.getContext('2d')!;
 
@@ -100,9 +161,20 @@ export function exportPng() {
   ctx.fillText(`${s.project.name} — ${f.name}`, 22, 18);
   ctx.font = `400 ${Math.max(10, cv.width / 96)}px "IBM Plex Mono", monospace`;
   ctx.fillStyle = '#7A7261';
-  const A = floorArea(f);
+  const sb = shellBBox(f);
+  const foot = sb && sb.x1 > sb.x0
+    ? `${((sb.x1 - sb.x0) / 100).toFixed(2)} × ${((sb.y1 - sb.y0) / 100).toFixed(2)} m`
+    : null;
+  /* Same rule as the prompt: a room total is only meaningful when the drawn
+     rooms actually account for the building. 1.9 m² inside a 75 m² shell is
+     not a floor area, it is two cupboards. */
+  const A = planFacts(f).mapped ? floorArea(f) : 0;
+  /* the importer names the project after the address, so printing both is noise */
+  const addr = s.project.source?.address;
+  const dupe = addr && s.project.name.includes(addr);
   ctx.fillText(
-    [s.project.source?.address, A ? `${fmtM2(A)} m²` : null].filter(Boolean).join('   ·   '),
+    [dupe ? null : addr, A ? `${fmtM2(A)} m² of rooms` : null, foot ? `footprint ${foot}` : null]
+      .filter(Boolean).join('   ·   '),
     22, 18 + Math.max(20, cv.width / 50),
   );
 

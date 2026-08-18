@@ -1,9 +1,9 @@
 import type {
   Draft, Floor, Handle, Hit, Layers, Marquee, Pt, SelObj, View,
 } from './types';
-import { clamp, dist, fmtM2, polyArea, polyCentroid, unitNormal } from './geometry';
+import { bboxOf, clamp, dist, fmtM2, polyArea, polyCentroid, unitNormal } from './geometry';
 import { CAT_BY_KIND, rr, toneFor } from './catalog';
-import { labelOf } from './model';
+import { labelOf, shellBBox } from './model';
 import {
   ACC, CYA, GHOST, PAPER, WALLC, gridStep, hexA, openingRect, pathPoly, wallQuad,
 } from './shapes';
@@ -35,6 +35,22 @@ export interface PaintInput {
   /** room names — off for the clean image-generator reference */
   roomLabels?: boolean;
   vignette?: boolean;
+  /** Automatic overall dimension chains plus a size under each room name. For
+   *  the print; never for the generator reference, which must carry no text. */
+  measures?: boolean;
+  /** Object labels. On by default; off for the generator reference, which the
+   *  prompt promises carries no lettering — this used to leak "Sofa 3-seat"
+   *  and the like straight into the conditioning image. */
+  objectLabels?: boolean;
+  /** Draw imported fitted objects as hatched, dashed boxes — right for a person,
+   *  who needs to see what came from the listing. Wrong for a generator: dashed
+   *  hatch is the drawing convention for a *surface*, so a run of them reads as
+   *  paving or a corridor rather than as joinery. Off for the reference image. */
+  hatchFixtures?: boolean;
+  /** Multiplies every annotation size and screen-space offset. The renderer is
+   *  written for a 1× screen canvas, so on a 3600 px print a 12 px caption comes
+   *  out illegible — the export derives this from its own resolution. */
+  textScale?: number;
 }
 
 export function paint(g: Ctx, input: PaintInput): void {
@@ -43,6 +59,7 @@ export function paint(g: Ctx, input: PaintInput): void {
     dpr = 1, grid = true, live = false, refImage = null, refOpacity = 0.45,
     ghost = null, selection = [], handles = [], hover = null, draft = null,
     place = null, marquee = null, snapHint = null, roomLabels = true, vignette = live,
+    measures = false, objectLabels = true, textScale = 1, hatchFixtures = true,
   } = input;
 
   const Z = view.zoom, PX = view.px, PY = view.py;
@@ -50,6 +67,7 @@ export function paint(g: Ctx, input: PaintInput): void {
   const sy = (wy: number) => wy * Z + PY;
   const u = 1 / Z;
   const LW = (p: number) => p * u;
+  const TS = Math.max(0.5, textScale);
 
   const world = () => { g.setTransform(dpr, 0, 0, dpr, 0, 0); g.translate(PX, PY); g.scale(Z, Z); };
   const screen = () => { g.setTransform(dpr, 0, 0, dpr, 0, 0); };
@@ -63,10 +81,10 @@ export function paint(g: Ctx, input: PaintInput): void {
     g.save(); screen();
     g.translate(sx(wx), sy(wy));
     if (rotDeg) g.rotate((rotDeg * Math.PI) / 180);
-    g.font = `500 ${size}px "IBM Plex Sans", sans-serif`;
+    g.font = `500 ${size * TS}px "IBM Plex Sans", sans-serif`;
     g.textAlign = align; g.textBaseline = baseline;
     if (halo) {
-      g.lineWidth = 3; g.strokeStyle = 'rgba(243,240,231,.85)'; g.lineJoin = 'round';
+      g.lineWidth = 3 * TS; g.strokeStyle = 'rgba(243,240,231,.85)'; g.lineJoin = 'round';
       g.strokeText(text, 0, 0);
     }
     g.fillStyle = color; g.fillText(text, 0, 0);
@@ -74,11 +92,30 @@ export function paint(g: Ctx, input: PaintInput): void {
   };
   const mono = (text: string, wx: number, wy: number, size: number, color: string) => {
     g.save(); screen();
-    g.font = `500 ${size}px "IBM Plex Mono", monospace`;
+    g.font = `500 ${size * TS}px "IBM Plex Mono", monospace`;
     g.textAlign = 'center'; g.textBaseline = 'middle';
-    g.lineWidth = 3.2; g.strokeStyle = 'rgba(243,240,231,.9)'; g.lineJoin = 'round';
+    g.lineWidth = 3.2 * TS; g.strokeStyle = 'rgba(243,240,231,.9)'; g.lineJoin = 'round';
     g.strokeText(text, sx(wx), sy(wy));
     g.fillStyle = color; g.fillText(text, sx(wx), sy(wy));
+    g.restore();
+  };
+
+  /** The bar is the one thing that makes a printed plan measurable off-paper.
+   *  Defined here so both the live canvas and the print can call it. */
+  const scaleBar = () => {
+    screen();
+    const barCm = gridStep(Z, 70 * TS), barPx = barCm * Z;
+    g.save();
+    g.strokeStyle = 'rgba(60,54,44,.65)'; g.fillStyle = 'rgba(60,54,44,.65)'; g.lineWidth = 1.4 * TS;
+    const bx = W - 22 * TS - barPx, by = H - 24 * TS;
+    g.beginPath();
+    g.moveTo(bx, by); g.lineTo(bx + barPx, by);
+    g.moveTo(bx, by - 4 * TS); g.lineTo(bx, by + 4 * TS);
+    g.moveTo(bx + barPx, by - 4 * TS); g.lineTo(bx + barPx, by + 4 * TS);
+    g.stroke();
+    g.font = `500 ${10 * TS}px "IBM Plex Mono", monospace`;
+    g.textAlign = 'center'; g.textBaseline = 'bottom';
+    g.fillText(barCm >= 100 ? `${barCm / 100} m` : `${barCm} cm`, bx + barPx / 2, by - 6 * TS);
     g.restore();
   };
 
@@ -242,6 +279,9 @@ export function paint(g: Ctx, input: PaintInput): void {
       g.lineWidth = LW(1.4); g.lineJoin = 'round'; g.lineCap = 'butt';
       if (c) {
         c.draw(g, i.w, i.h, u);
+      } else if (!hatchFixtures) {
+        /* a plain solid block: unmistakably an object with a footprint */
+        rr(g, -i.w / 2, -i.h / 2, i.w, i.h, 2); g.fill(); g.stroke();
       } else {
         /* imported fitted object: hatched box — clearly from the listing */
         rr(g, -i.w / 2, -i.h / 2, i.w, i.h, 2); g.fill();
@@ -259,8 +299,8 @@ export function paint(g: Ctx, input: PaintInput): void {
       }
       g.restore();
 
-      const lab = labelOf(i);
-      if (lab && i.w * Z > 34) {
+      const lab = objectLabels ? labelOf(i) : '';
+      if (lab && i.w * Z > 34 * TS) {
         const size = clamp(11 * Math.min(1, Z * 3.4), 7, 12);
         const rad = ((i.rot || 0) * Math.PI) / 180;
         const hh = (Math.abs(i.w * Math.sin(rad)) + Math.abs(i.h * Math.cos(rad))) / 2;
@@ -268,7 +308,7 @@ export function paint(g: Ctx, input: PaintInput): void {
           const r = (((i.rot || 0) % 360) + 360) % 360;
           label(lab, i.x, i.y, size, '#3E3830', 'center', 'middle', true, r > 90 && r < 270 ? r - 180 : r);
         } else {
-          label(lab, i.x, i.y + hh + size * 0.95 * u, size, '#4A443A', 'center', 'middle', true, 0);
+          label(lab, i.x, i.y + hh + size * TS * 0.95 * u, size, '#4A443A', 'center', 'middle', true, 0);
         }
       }
     });
@@ -281,13 +321,30 @@ export function paint(g: Ctx, input: PaintInput): void {
       const c = polyCentroid(a.poly), A = polyArea(a.poly);
       const cx = c.x + (a.nx || 0), cy = c.y + (a.ny || 0);
       const nm = roomLabels ? a.name || '' : '';
-      const big = A * Z * Z > 2600;
-      if (nm && big) {
-        label(nm, cx, cy - (L.areas ? 9 * u : 0), clamp(13 * Math.min(1, Z * 3), 8, 13), '#37312A');
+      const big = A * Z * Z > 2600 * TS * TS;
+
+      /* one centred stack, so a third row cannot collide with the other two */
+      const rows: [string, number, string, boolean][] = [];
+      if (nm && big) rows.push([nm, clamp(13 * Math.min(1, Z * 3), 8, 13), '#37312A', false]);
+      if (L.areas && A * Z * Z > 1500 * TS * TS) {
+        rows.push([`${fmtM2(A)} m²`, clamp(11 * Math.min(1, Z * 3), 7, 11), '#7A7261', true]);
       }
-      if (L.areas && A * Z * Z > 1500) {
-        mono(`${fmtM2(A)} m²`, cx, cy + (nm && big ? 9 * u : 0), clamp(11 * Math.min(1, Z * 3), 7, 11), '#7A7261');
+      /* A third row needs its own, larger allowance: a 0.3 m² cupboard has room
+         for a name, not for a name, an area and a size. */
+      if (measures && A * Z * Z > 9000 * TS * TS) {
+        const r = bboxOf(a.poly);
+        rows.push([
+          `${((r.x1 - r.x0) / 100).toFixed(1)} × ${((r.y1 - r.y0) / 100).toFixed(1)} m`,
+          clamp(10 * Math.min(1, Z * 3), 7, 10), '#8C857A', true,
+        ]);
       }
+      /* pitch off the largest row — and in the same units the text is drawn in,
+         or a scaled-up print collides with itself */
+      const pitch = Math.max(...rows.map(([, size]) => size), 9) * 1.25 * TS;
+      rows.forEach(([t, size, col, isMono], i) => {
+        const y = cy + (i - (rows.length - 1) / 2) * pitch * u;
+        if (isMono) mono(t, cx, y, size, col); else label(t, cx, y, size, col);
+      });
     });
   }
 
@@ -306,8 +363,62 @@ export function paint(g: Ctx, input: PaintInput): void {
         g.stroke();
       });
       const m = { x: (d.a.x + d.b.x) / 2, y: (d.a.y + d.b.y) / 2 };
-      if (n.L * Z > 34) mono(String(Math.round(n.L)), m.x + n.x * 9 * u, m.y + n.y * 9 * u, 10, CYA);
+      if (n.L * Z > 34 * TS) mono(String(Math.round(n.L)), m.x + n.x * 9 * TS * u, m.y + n.y * 9 * TS * u, 10, CYA);
     });
+  }
+
+  /* ---- overall dimensions, drawn outside the footprint ---- */
+  if (measures) {
+    const sb = shellBBox(f);
+    if (sb && sb.x1 > sb.x0 && sb.y1 > sb.y0) {
+      const x0 = sx(sb.x0), x1 = sx(sb.x1), y0 = sy(sb.y0), y1 = sy(sb.y1);
+      const off = 30 * TS, ink = 'rgba(60,54,44,.8)';
+      g.save(); screen();
+      g.strokeStyle = ink; g.fillStyle = ink; g.lineWidth = 1.2 * TS;
+      g.font = `600 ${12 * TS}px "IBM Plex Mono", monospace`;
+      g.lineJoin = 'round';
+
+      /** architectural end tick: a 45° slash, leaning the same way on both chains */
+      const tick = (x: number, y: number) => {
+        const d = 4.5 * TS;
+        g.beginPath();
+        g.moveTo(x - d, y + d); g.lineTo(x + d, y - d);
+        g.stroke();
+      };
+      const caption = (text: string, x: number, y: number, rot: number) => {
+        g.save();
+        g.translate(x, y);
+        if (rot) g.rotate((rot * Math.PI) / 180);
+        g.textAlign = 'center'; g.textBaseline = 'bottom';
+        g.lineWidth = 3.4 * TS; g.strokeStyle = 'rgba(243,240,231,.92)';
+        g.strokeText(text, 0, 0);
+        g.fillStyle = ink; g.fillText(text, 0, 0);
+        g.restore();
+      };
+      const metres = (cm: number) => `${(cm / 100).toFixed(2)} m`;
+
+      /* width, below the plan */
+      const hy = y1 + off;
+      g.beginPath();
+      g.moveTo(x0, hy); g.lineTo(x1, hy);
+      g.moveTo(x0, y1 + 7 * TS); g.lineTo(x0, hy + 7 * TS);      // witness lines
+      g.moveTo(x1, y1 + 7 * TS); g.lineTo(x1, hy + 7 * TS);
+      g.stroke();
+      tick(x0, hy); tick(x1, hy);
+      caption(metres(sb.x1 - sb.x0), (x0 + x1) / 2, hy - 5 * TS, 0);
+
+      /* height, left of the plan — text reads bottom-to-top, as on a drawing */
+      const vx = x0 - off;
+      g.beginPath();
+      g.moveTo(vx, y0); g.lineTo(vx, y1);
+      g.moveTo(x0 - 7 * TS, y0); g.lineTo(vx - 7 * TS, y0);
+      g.moveTo(x0 - 7 * TS, y1); g.lineTo(vx - 7 * TS, y1);
+      g.stroke();
+      tick(vx, y0); tick(vx, y1);
+      caption(metres(sb.y1 - sb.y0), vx - 5 * TS, (y0 + y1) / 2, -90);
+      g.restore();
+    }
+    scaleBar();
   }
 
   /* ---- text notes ---- */
@@ -385,6 +496,18 @@ export function paint(g: Ctx, input: PaintInput): void {
         g.fillStyle = PAPER; g.fill();
         g.strokeStyle = ACC; g.lineWidth = 1.8; g.stroke();
         g.beginPath(); g.arc(h.sx, h.sy, 2, 0, 6.2832); g.fillStyle = ACC; g.fill();
+      } else if (h.dir && !(h.dir[0] && h.dir[1])) {
+        /* A side handle: a short bar lying along its own edge, so it reads as
+           "this edge moves" rather than as a corner gone astray. It turns with
+           the object — drawn square to the screen it would cut across the edge
+           it belongs to the moment anything is rotated. */
+        const rot = ((h.o as { rot?: number }).rot || 0) * Math.PI / 180;
+        const along = h.dir[0] ? 0 : 1;                 // 0 = bar runs vertically
+        const bw = along ? 9 : 3.2, bh = along ? 3.2 : 9;
+        g.translate(h.sx, h.sy); g.rotate(rot);
+        g.rect(-bw, -bh, bw * 2, bh * 2);
+        g.fillStyle = PAPER; g.fill();
+        g.strokeStyle = ACC; g.lineWidth = 1.8; g.stroke();
       } else {
         const r = h.k === 'vtx' || h.k === 'end' ? 4.2 : 4;
         g.rect(h.sx - r, h.sy - r, r * 2, r * 2);
@@ -501,20 +624,7 @@ export function paint(g: Ctx, input: PaintInput): void {
   }
 
   /* scale bar */
-  screen();
-  const barCm = gridStep(Z, 70), barPx = barCm * Z;
-  g.save();
-  g.strokeStyle = 'rgba(60,54,44,.65)'; g.fillStyle = 'rgba(60,54,44,.65)'; g.lineWidth = 1.4;
-  const bx = W - 22 - barPx, by = H - 24;
-  g.beginPath();
-  g.moveTo(bx, by); g.lineTo(bx + barPx, by);
-  g.moveTo(bx, by - 4); g.lineTo(bx, by + 4);
-  g.moveTo(bx + barPx, by - 4); g.lineTo(bx + barPx, by + 4);
-  g.stroke();
-  g.font = '500 10px "IBM Plex Mono", monospace';
-  g.textAlign = 'center'; g.textBaseline = 'bottom';
-  g.fillText(barCm >= 100 ? `${barCm / 100} m` : `${barCm} cm`, bx + barPx / 2, by - 6);
-  g.restore();
+  scaleBar();
   screen();
 }
 

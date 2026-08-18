@@ -1,10 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CATALOG, blankProject, fmlToProject, handlesFor, parseFundaSource, resolveSel } from '@engine/index';
+import {
+  CATALOG, CAT_BY_KIND, blankProject, fmlToProject, handlesFor, parseFundaSource, pointInPoly,
+  resolveSel,
+} from '@engine/index';
+import { SEATS } from '@engine/catalog';
 import { paint } from '@engine/render';
 import type { Fml } from '@engine/io/funda';
-import type { Draft, Layers, View } from '@engine/types';
+import type { Draft, Layers, Pt, View } from '@engine/types';
 
 /** A canvas that records nothing but refuses non-finite arguments. NaN in a
  *  path silently draws nothing in a real browser, which is exactly the class
@@ -98,6 +102,145 @@ describe('paint', () => {
   });
 });
 
+describe('print measurements', () => {
+  const project = fmlToProject(fml, parseFundaSource(listing));
+  const floor = project.floors[1];
+  const base = { floor, view: VIEW, width: 1200, height: 800, layers: LAYERS } as const;
+
+  it('adds dimension chains and room sizes without NaN', () => {
+    const off = recordingCtx();
+    paint(off.ctx as never, base);
+    const on = recordingCtx();
+    expect(() => paint(on.ctx as never, { ...base, measures: true })).not.toThrow();
+    /* two chains with witness lines and ticks, plus a size row per named room */
+    expect(on.calls.fillText).toBeGreaterThan(off.calls.fillText);
+    expect(on.calls.stroke).toBeGreaterThan(off.calls.stroke);
+
+  });
+
+  /* Counted exactly, on a floor with no labels of its own: two chain captions
+     plus the scale bar — which a flat export never used to get at all, because
+     paint() returns early when live is false, before the bar at the bottom. */
+  it('adds exactly two captions and a scale bar', () => {
+    const bare = { ...floor, areas: [], items: [], notes: [], dims: [], lines: [] };
+    const off = recordingCtx();
+    paint(off.ctx as never, { ...base, floor: bare });
+    expect(off.calls.fillText ?? 0).toBe(0);
+
+    const on = recordingCtx();
+    paint(on.ctx as never, { ...base, floor: bare, measures: true });
+    expect(on.calls.fillText).toBe(3);
+    /* the two chain captions are haloed so they read over the plan; the bar,
+       sitting in the margin, is not */
+    expect(on.calls.strokeText).toBe(2);
+  });
+
+  it('survives a floor with nothing to measure', () => {
+    const empty = { ...floor, walls: [], areas: [], items: [], notes: [], dims: [], lines: [] };
+    const { ctx } = recordingCtx();
+    expect(() => paint(ctx as never, { ...base, floor: empty, measures: true })).not.toThrow();
+  });
+
+  /* The prompt tells the model the reference carries no lettering. It has to be
+     true: a label in the conditioning image bleeds through into the render. */
+  it('the generator reference contains no text whatsoever', () => {
+    const { ctx, calls } = recordingCtx();
+    paint(ctx as never, {
+      ...base,
+      layers: { rooms: true, areas: false, furn: true, dims: false, notes: false },
+      floor: { ...floor, notes: [] },
+      roomLabels: false,
+      objectLabels: false,
+    });
+    expect(calls.fillText ?? 0).toBe(0);
+    expect(calls.strokeText ?? 0).toBe(0);
+    expect(calls.fill).toBeGreaterThan(20);          // it did draw the plan
+  });
+
+  it('object labels are on by default, so the print keeps them', () => {
+    const { calls } = (() => {
+      const r = recordingCtx();
+      paint(r.ctx as never, { ...base, roomLabels: false });
+      return r;
+    })();
+    expect(calls.fillText).toBeGreaterThan(0);
+  });
+});
+
+describe('annotation scales with the output resolution', () => {
+  const project = fmlToProject(fml, parseFundaSource(listing));
+  const floor = project.floors[1];
+  const base = { floor, view: VIEW, width: 1200, height: 800, layers: LAYERS } as const;
+
+  /** records what was written and where, plus the font in force at the time */
+  function textCtx() {
+    const out: { text: string; x: number; y: number; px: number }[] = [];
+    let px = 0;
+    const o: Record<string, unknown> = {};
+    for (const m of [
+      'beginPath', 'moveTo', 'lineTo', 'closePath', 'stroke', 'fill', 'arc', 'ellipse', 'rect',
+      'strokeRect', 'fillRect', 'save', 'restore', 'translate', 'rotate', 'scale', 'setTransform',
+      'clip', 'quadraticCurveTo', 'setLineDash', 'drawImage', 'strokeText',
+    ]) o[m] = () => {};
+    o.fillText = (text: string, x: number, y: number) => out.push({ text, x, y, px });
+    o.measureText = () => ({ width: 40 });
+    o.getLineDash = () => [];
+    o.createRadialGradient = () => ({ addColorStop() {} });
+    const ctx = new Proxy(o, {
+      get: (t, k) => (k in t ? t[k as string] : undefined),
+      set: (_t, k, v) => {
+        if (k === 'font') px = parseFloat(String(v).match(/(\d+(?:\.\d+)?)px/)?.[1] ?? '0');
+        return true;
+      },
+    });
+    return { ctx, out };
+  }
+
+  it('multiplies the font size actually set', () => {
+    const one = textCtx();
+    paint(one.ctx as never, { ...base, measures: true });
+    const three = textCtx();
+    paint(three.ctx as never, { ...base, measures: true, textScale: 3 });
+
+    const biggest = (r: typeof one.out) => Math.max(...r.map(t => t.px));
+    expect(biggest(three.out)).toBeCloseTo(biggest(one.out) * 3, 1);
+  });
+
+  /* Twice now the stack has collided: the pitch was in screen pixels while the
+     text was drawn at size × scale. One room, so every captured row belongs to
+     the same stack and the gaps mean what they look like. */
+  it('never stacks a room label on top of itself', () => {
+    const solo = blankProject('x', false).floors[0];
+    solo.areas[0].name = 'Woonkamer';
+    solo.items = []; solo.dims = []; solo.lines = []; solo.notes = [];
+    const view: View = { zoom: 1, px: 200, py: 200 };
+
+    for (const textScale of [1, 2, 2.75, 4, 6]) {
+      const { ctx, out } = textCtx();
+      paint(ctx as never, {
+        floor: solo, view, width: 1400, height: 1600, layers: LAYERS,
+        measures: true, textScale,
+      });
+      const stack = out.filter(t => /Woonkamer|m²|×/.test(t.text)).sort((a, b) => a.y - b.y);
+      expect(stack.length, `scale ${textScale}`).toBe(3);
+      for (let i = 1; i < stack.length; i++) {
+        const gap = stack[i].y - stack[i - 1].y;
+        expect(gap, `scale ${textScale}: rows ${gap.toFixed(1)}px apart`)
+          .toBeGreaterThanOrEqual(Math.max(stack[i].px, stack[i - 1].px));
+      }
+    }
+  });
+
+  it('drops the labels a small room can no longer hold', () => {
+    const one = textCtx();
+    paint(one.ctx as never, { ...base, measures: true });
+    const big = textCtx();
+    paint(big.ctx as never, { ...base, measures: true, textScale: 4 });
+    /* the 0.1 m² cupboards earn a caption at 1× and not at 4× */
+    expect(big.out.length).toBeLessThan(one.out.length);
+  });
+});
+
 describe('catalogue glyphs', () => {
   it('every glyph survives its own size and absurd ones', () => {
     const entries = CATALOG.flatMap(g => g.items);
@@ -108,6 +251,132 @@ describe('catalogue glyphs', () => {
         expect(() => e.draw(ctx as never, w, h, 0.5), `${e.kind} @ ${w}×${h}`).not.toThrow();
       }
     }
+  });
+});
+
+describe('tables seat the number they are named after', () => {
+  /* Every chair is one translate() and nothing else in these glyphs translates,
+     so the calls are the seats — centre and all. The count is the point: a
+     "Round 6p" shipped with eight, four of them at the corners of a circle,
+     and the render drew all eight because the reference did. */
+  function seatsOf(kind: string) {
+    const at: Pt[] = [];
+    const o: Record<string, unknown> = {};
+    for (const m of [
+      'beginPath', 'moveTo', 'lineTo', 'closePath', 'stroke', 'fill', 'arc', 'save', 'restore',
+      'setLineDash', 'quadraticCurveTo', 'rotate', 'scale', 'rect', 'fillText',
+    ]) o[m] = () => {};
+    o.translate = (x: number, y: number) => { at.push({ x, y }); };
+    o.measureText = () => ({ width: 40 });
+    const e = CAT_BY_KIND[kind];
+    e.draw(o as never, e.w, e.h, 0.5);
+    return { at, e };
+  }
+
+  for (const [kind, n] of Object.entries(SEATS)) {
+    it(`${kind} (${CAT_BY_KIND[kind].name}) draws ${n} chairs`, () => {
+      expect(seatsOf(kind).at).toHaveLength(n);
+    });
+  }
+
+  /* The rule as it was put to us: a table for six is three a side, not two a
+     side and a carver at each head. */
+  for (const kind of ['dt4', 'dt6', 'dt8', 'gtable']) {
+    it(`${kind} seats nobody at its ends`, () => {
+      const { at, e } = seatsOf(kind);
+      for (const p of at) {
+        expect(Math.abs(p.y), `${kind} chair at ${p.x},${p.y}`).toBeGreaterThan(e.h / 2);
+        expect(Math.abs(p.x), `${kind} chair at ${p.x},${p.y}`).toBeLessThan(e.w / 2);
+      }
+      /* and evenly split between the two long sides */
+      expect(at.filter(p => p.y < 0)).toHaveLength(at.length / 2);
+    });
+  }
+
+  /* Round tables used to lay their chairs out on a bounding box. */
+  for (const kind of ['dtr', 'ktable', 'ktable2']) {
+    it(`${kind} rings its chairs evenly around the circle`, () => {
+      const { at, e } = seatsOf(kind);
+      const r = at.map(p => Math.hypot(p.x, p.y));
+      for (const d of r) expect(d).toBeCloseTo(e.w / 2 + 22, 6);
+      const ang = at.map(p => Math.atan2(p.y, p.x)).sort((a, b) => a - b);
+      const step = 6.2832 / at.length;
+      for (let i = 1; i < ang.length; i++) expect(ang[i] - ang[i - 1]).toBeCloseTo(step, 3);
+    });
+  }
+});
+
+describe('L-shaped seating', () => {
+  /* Capture the first closed path a glyph builds — for these it is the outline
+     itself, so the shape can be asserted rather than eyeballed. */
+  function outlineOf(kind: string, size?: [number, number]) {
+    const pts: Pt[] = [];
+    let open = true;
+    const o: Record<string, unknown> = {};
+    for (const m of [
+      'beginPath', 'stroke', 'fill', 'arc', 'save', 'restore', 'setLineDash', 'quadraticCurveTo',
+      'translate', 'scale', 'rotate', 'fillText', 'rect',
+    ]) o[m] = () => {};
+    o.moveTo = (x: number, y: number) => { if (open) pts.push({ x, y }); };
+    o.lineTo = (x: number, y: number) => { if (open) pts.push({ x, y }); };
+    o.closePath = () => { open = false; };
+    o.measureText = () => ({ width: 40 });
+    const c = CAT_BY_KIND[kind];
+    const e = { ...c, w: size ? size[0] : c.w, h: size ? size[1] : c.h };
+    e.draw(o as never, e.w, e.h, 0.5);
+    return { pts, e };
+  }
+
+  /** the deepest point of the notch — dead centre of the open corner */
+  const notch = (e: { w: number; h: number }) => ({ x: e.w * .3, y: e.h * .3 });
+
+  for (const kind of ['sofaL', 'sofaChaise']) {
+    it(`${kind} leaves the far corner as open floor`, () => {
+      const { pts, e } = outlineOf(kind);
+      expect(pts).toHaveLength(6);                       // an L, not a rectangle
+      expect(pointInPoly(notch(e), pts)).toBe(false);
+      /* and the two arms are solid */
+      expect(pointInPoly({ x: -e.w / 2 + 20, y: -e.h / 2 + 20 }, pts)).toBe(true);
+      expect(pointInPoly({ x: e.w / 2 - 20, y: -e.h / 2 + 20 }, pts)).toBe(true);
+      expect(pointInPoly({ x: -e.w / 2 + 20, y: e.h / 2 - 20 }, pts)).toBe(true);
+    });
+  }
+
+  /* An L whose arms meet is a rectangle. Seat depth is physical, so it has to
+     yield to the footprint rather than swallow the notch. */
+  it('stays an L at any size, including a square and a tiny one', () => {
+    for (const [w, h] of [[265, 200], [200, 200], [150, 150], [100, 100], [80, 80], [400, 150]]) {
+      const { pts, e } = outlineOf('sofaL', [w, h]);
+      const at = `${w}×${h}`;
+      expect(pointInPoly(notch(e), pts), `${at} lost its notch`).toBe(false);
+      /* the notch is a real area, not a sliver — measured off the inner corner,
+         which the outline puts at index 3 */
+      const inner = pts[3];
+      expect((w / 2 - inner.x) / w, at).toBeGreaterThan(.4);
+      expect((h / 2 - inner.y) / h, at).toBeGreaterThan(.4);
+    }
+  });
+
+  it('a straight sofa fills its whole footprint, which is the contrast', () => {
+    const { pts, e } = outlineOf('sofa3');
+    expect(pointInPoly(notch(e), pts)).toBe(true);
+  });
+
+  it('is findable by the words a person would actually type', () => {
+    /* the same match the tray and the Pro catalogue run */
+    const hit = (q: string) => CATALOG.flatMap(g => g.items)
+      .filter(i => [i.name, i.group, i.alt ?? ''].some(s => s.toLowerCase().includes(q)))
+      .map(i => i.kind);
+
+    expect(hit('l-shape')).toEqual(expect.arrayContaining(['sofaL', 'sofaChaise']));
+    expect(hit('hoekbank')).toContain('sofaL');
+    expect(hit('corner')).toContain('sofaL');
+    expect(hit('sectional')).toContain('sofaL');
+    expect(hit('chaise')).toEqual(['sofaChaise']);
+    expect(hit('fauteuil')).toContain('armchair');
+    /* an alias is a search key only — it must never reach the tile */
+    expect(CAT_BY_KIND.sofaL.name).toBe('L-shaped sofa');
+    expect(CATALOG.flatMap(g => g.items).every(i => !i.name.includes('hoekbank'))).toBe(true);
   });
 });
 

@@ -9,6 +9,13 @@ export const FIXTURES = path.join(here, '..', 'fixtures');
 export const APP = process.env.E2E_TARGET === 'next' ? '/' : '/index.html';
 export const FUNDA_URL = 'https://www.funda.nl/detail/koop/rosmalen/huis-pieter-kleijnstraat-19/44432123/';
 
+/* This suite runs the app in LOCAL MODE — no Supabase credentials, therefore no
+   accounts and no gate, which is the deployment CI and a laptop both get. The
+   old forged session cookie is gone with the password gate that accepted it: a
+   Supabase JWT is signed by Supabase and cannot be minted here, so the only
+   honest way to drive the editor from a test is to run it ungated. The armed
+   gate has its own Playwright project; see tests/e2e/10-gate.spec.js. */
+
 /* ── a clean, deterministic app on every test ──────────────────── */
 export async function fresh(page, opts = {}) {
   const errors = [];
@@ -35,12 +42,24 @@ export async function fresh(page, opts = {}) {
   await page.addInitScript(() => {
     try {
       if (!sessionStorage.getItem('__pw_cleared')) {
+        /* clear(), not a list of keys: in cloud mode `src/shell/storage.ts`
+           suffixes every document key with the account's uuid (`pgs.index.v2~…`),
+           and in local mode — the mode this suite runs in — they are bare. Only
+           the bare ones are ever written here, but clearing wholesale means the
+           suite does not have to know which. */
         localStorage.clear();
+        /* Renders live in IndexedDB, which survives between tests AND between
+           whole runs — one leftover render makes every filmstrip assertion
+           depend on what ran yesterday. Queued here, before any app code opens
+           the database, so the open waits behind the delete. The name is
+           `IDB_NAME` in src/shell/renders.ts; this file cannot import it. */
+        indexedDB.deleteDatabase('pgs.renders.v1');
         sessionStorage.setItem('__pw_cleared', '1');
       }
       localStorage.setItem('pgs.coach.v1', '1');   // never show the coach mark in tests
     } catch (e) { }
   });
+
   if (opts.mock !== false) await mockNetwork(page);
   return errors;
 }
@@ -69,7 +88,7 @@ export async function mockNetwork(page) {
 }
 
 export const S = page => page.evaluate(() => JSON.parse(JSON.stringify({
-  simple: window.__S.simple, fi: window.__S.fi, sel: window.__S.sel,
+  rendersOpen: window.__S.rendersOpen, fi: window.__S.fi, sel: window.__S.sel,
   place: window.__S.place, zoom: window.__S.zoom, px: window.__S.px, py: window.__S.py,
   dirty: window.__S.dirty,
   name: window.__S.proj && window.__S.proj.name,

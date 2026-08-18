@@ -4,13 +4,18 @@ import { fresh, S, floorOf, importMocked, starter, addFromTray, clickPlan, dragP
 test.beforeEach(async ({ page }) => { await fresh(page); });
 
 test.describe('the meeting shell', () => {
-  test('hides every pro surface and shows all floors as chips', async ({ page }) => {
+  test('carries no side panels and shows all floors as chips', async ({ page }) => {
     await importMocked(page);
-    await expect(page.locator('.toolrail')).toBeHidden();
-    await expect(page.locator('.panel.left')).toBeHidden();
-    await expect(page.locator('.panel.right')).toBeHidden();
-    await expect(page.locator('.statusbar')).toBeHidden();
     await expect(page.locator('#floorbar')).toBeVisible();
+    /* v2 deleted the panels; the shipped build merely hides them in Simple */
+    if (process.env.E2E_TARGET === 'next') {
+      await expect(page.locator('.panel')).toHaveCount(0);
+      await expect(page.locator('.statusbar')).toHaveCount(0);
+    } else {
+      await expect(page.locator('.panel.left')).toBeHidden();
+      await expect(page.locator('.panel.right')).toBeHidden();
+      await expect(page.locator('.statusbar')).toBeHidden();
+    }
 
     const chips = page.locator('#fchips .fchip');
     await expect(chips).toHaveCount(5);
@@ -64,6 +69,36 @@ test.describe('the Add tray', () => {
     await page.locator('#traySearch').fill('zzzz');
     await page.waitForTimeout(150);
     await expect(page.locator('#trayBody .empty')).toBeVisible();
+  });
+
+  test('finds the L-shaped sofas by synonym, and places one at real size', async ({ page }) => {
+    /* the frozen POC in index.html has neither the L glyphs nor search aliases */
+    test.skip(process.env.E2E_TARGET !== 'next', 'v2 shell feature');
+    await starter(page);
+    await page.locator('#fAdd').click();
+
+    /* the words a person types — none of which is the tile's own name */
+    for (const [q, kind] of [['l-shape', 'sofaL'], ['hoekbank', 'sofaL'], ['chaise', 'sofaChaise'],
+      ['corner', 'sofaL'], ['sectional', 'sofaL']]) {
+      await page.locator('#traySearch').fill(q);
+      await page.waitForTimeout(150);
+      await expect(page.locator(`.tile[data-kind="${kind}"]`), q).toHaveCount(1);
+    }
+    /* the alias is a search key, never shown */
+    await page.locator('#traySearch').fill('hoekbank');
+    await page.waitForTimeout(150);
+    expect((await page.locator('#trayBody .tile b').allInnerTexts()).join(' ')).toBe('L-shaped sofa');
+
+    await page.locator('.tile[data-kind="sofaL"]').click();
+    await clickPlan(page, 400, 320);
+    await page.waitForTimeout(200);
+    const f = await floorOf(page);
+    expect(f.items).toBe(1);
+    const it = await page.evaluate(() => {
+      const i = window.__S.proj.floors[0].items[0];
+      return { kind: i.kind, w: i.w, h: i.h, label: i.label };
+    });
+    expect(it).toMatchObject({ kind: 'sofaL', w: 265, h: 200, label: 'L-shaped sofa' });
   });
 
   test('closes itself once you arm an item, so the plan is visible', async ({ page }) => {
@@ -227,7 +262,6 @@ test.describe('placing and editing without ever leaving the canvas', () => {
 
     await addFromTray(page, 'draw:measure', 700, 600);
     expect((await floorOf(page)).dims).toBe(1);
-    expect((await S(page)).simple).toBe(true);
     // measuring turns the dimension layer back on by itself
     expect(await page.evaluate(() => !!window.__S.view.dims)).toBe(true);
     await expect(page.locator('#ctx')).toContainText(/m|cm/);

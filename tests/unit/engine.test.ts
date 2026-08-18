@@ -4,8 +4,9 @@ import path from 'node:path';
 import {
   CATALOG, CAT_BY_KIND, blankProject, buildPrompt, contentBBox, fmlToProject, migrate,
   newProject, parseFundaSource, parseProject, planFacts, pointInPoly, polyArea, polyCentroid,
-  rotPt, serializeProject, setLabel, labelOf, shellBBox, snapAngle, snapPoint, axisLock,
-  fitTo, zoomAt, toScreen, toWorld, handlesFor, hitTest, resolveSel,
+  rotPt, serializeProject, setLabel, setDesc, descOf, labelOf, makeItem, newArea, bearing,
+  shellBBox, snapAngle, snapPoint, axisLock,
+  fitTo, zoomAt, toScreen, toWorld, handlesFor, cursorForHandle, hitTest, resolveSel, placeOf,
 } from '@engine/index';
 import type { Fml } from '@engine/io/funda';
 import type { Item, Layers, View } from '@engine/types';
@@ -191,6 +192,62 @@ describe('hit testing', () => {
     const two = resolveSel(f, f.walls.slice(0, 2).map(w => ({ t: 'wall' as const, id: w.id })));
     expect(handlesFor(two, v)).toHaveLength(0);
   });
+
+  /* An item used to offer only its four corners, so either both dimensions
+     changed or neither did. */
+  const itemSel = (over: Partial<Item> = {}) => {
+    const p = blankProject('x', false);
+    const f = p.floors[0];
+    f.items.push({ id: 'i1', kind: 'chair', x: 400, y: 500, w: 200, h: 100, rot: 0, ...over } as Item);
+    return resolveSel(f, [{ t: 'item', id: 'i1' }]);
+  };
+
+  it('offers all four sides as well as the corners', () => {
+    const hs = handlesFor(itemSel(), v);
+    const res = hs.filter(h => h.k === 'res');
+    expect(res).toHaveLength(8);
+    expect(hs.filter(h => h.k === 'rot')).toHaveLength(1);
+    const corners = res.filter(h => h.dir![0] && h.dir![1]);
+    const sides = res.filter(h => !(h.dir![0] && h.dir![1]));
+    expect(corners).toHaveLength(4);
+    expect(sides).toHaveLength(4);
+    /* every side exactly once, and never the no-op direction */
+    expect(sides.map(h => h.dir!.join(',')).sort())
+      .toEqual(['-1,0', '0,-1', '0,1', '1,0']);
+  });
+
+  it('puts the corners first, so a small object still resizes both ways', () => {
+    const res = handlesFor(itemSel(), v).filter(h => h.k === 'res');
+    /* hitHandle returns the first within range; on an object only a few pixels
+       across the corner and side handles overlap, and the corner has to win */
+    expect(res.slice(0, 4).every(h => h.dir![0] && h.dir![1])).toBe(true);
+  });
+
+  it('sits each side handle on the middle of its edge', () => {
+    const hs = handlesFor(itemSel(), v).filter(h => h.k === 'res');
+    const right = hs.find(h => h.dir![0] === 1 && h.dir![1] === 0)!;
+    const c = toScreen(v, 400, 500);
+    /* 200 wide, so the right edge is 100 cm out and the handle is level with
+       the centre — no vertical offset at all */
+    expect(right.sx).toBeCloseTo(toScreen(v, 500, 500).x, 6);
+    expect(right.sy).toBeCloseTo(c.y, 6);
+  });
+
+  it('points the cursor along the axis the handle actually pulls', () => {
+    const hs = handlesFor(itemSel(), v).filter(h => h.k === 'res');
+    const dir = (x: number, y: number) => hs.find(h => h.dir![0] === x && h.dir![1] === y)!;
+    expect(cursorForHandle(dir(1, 0))).toBe('ew-resize');
+    expect(cursorForHandle(dir(0, 1))).toBe('ns-resize');
+    expect(cursorForHandle(dir(1, 1))).toBe('nwse-resize');
+    expect(cursorForHandle(dir(1, -1))).toBe('nesw-resize');
+    expect(cursorForHandle(null)).toBe('default');
+  });
+
+  it('turns the cursor with the object, because the top edge is not always up', () => {
+    const hs = handlesFor(itemSel({ rot: 90 }), v).filter(h => h.k === 'res');
+    const right = hs.find(h => h.dir![0] === 1 && h.dir![1] === 0)!;
+    expect(cursorForHandle(right)).toBe('ns-resize');
+  });
 });
 
 describe('catalogue', () => {
@@ -204,6 +261,35 @@ describe('catalogue', () => {
       expect(e.h, k).toBeGreaterThan(0);
       expect(e.name.length, k).toBeGreaterThan(1);
     }
+  });
+
+  /* The tray searches name, group and `alt`. A kitchen had no table in it at
+     all, and the one round table in the catalogue was called "Round 6p" over in
+     Dining — so the words a person actually types found nothing. */
+  const finds = (q: string) => CATALOG.flatMap(g => g.items.filter(i =>
+    [i.name, g.group, i.alt ?? ''].some(t => t.toLowerCase().includes(q.toLowerCase()))));
+
+  it('finds a round table by the words someone would type', () => {
+    for (const q of ['round table', 'ronde tafel', 'circular', 'keukentafel', 'bistro']) {
+      expect(finds(q).length, q).toBeGreaterThan(0);
+    }
+  });
+
+  /* The tray matches a contiguous substring, so "round table" only reaches an
+     entry whose name or alt has those two words next to each other — which is
+     why the 6-seater called "Round 6p" was invisible to the obvious query. */
+  it('finds every round table, not just the ones named like one', () => {
+    const kinds = finds('round table').map(i => i.kind);
+    expect(kinds).toContain('dtr');
+    expect(kinds).toContain('ktable');
+  });
+
+  it('has a round table you can put in a kitchen', () => {
+    const kitchen = CATALOG.find(g => g.group === 'Kitchen')!.items;
+    const round = kitchen.filter(i => /round/i.test(`${i.name} ${i.alt ?? ''}`));
+    expect(round.length).toBeGreaterThan(0);
+    /* square-on so the circle glyph is a circle, not an ellipse */
+    for (const t of round) expect(t.w, t.kind).toBe(t.h);
   });
 });
 
@@ -244,5 +330,282 @@ describe('image-generator prompt', () => {
 
   it('folds in a free-text style', () => {
     expect(buildPrompt(p, floor, { ...base, style: 'warm oak' })).toContain('warm oak');
+  });
+});
+
+describe('compass bearings', () => {
+  it('reads a facing vector, y-down', () => {
+    expect(bearing(0, -1)).toBe('north');
+    expect(bearing(0, 1)).toBe('south');
+    expect(bearing(1, 0)).toBe('east');
+    expect(bearing(-1, 0)).toBe('west');
+    expect(bearing(1, -1)).toBe('north-east');
+    expect(bearing(-1, 1)).toBe('south-west');
+    expect(bearing(0, 0)).toBe('central');
+  });
+});
+
+describe('openings report the wall they are in, not their own octant', () => {
+  /* A run of windows across one elevation used to come back as two diagonals,
+     so a plain rectangle reported all four and the light direction said
+     nothing. Facing is a property of the wall. */
+  const rect = () => {
+    const p = blankProject('x', false);
+    const f = p.floors[0];
+    f.walls.forEach(w => { w.openings = []; });
+    return { p, f };
+  };
+
+  it('puts three windows spread along the top wall all in the north', () => {
+    const { f } = rect();
+    const top = f.walls.find(w => w.a.y === 0 && w.b.y === 0)!;
+    [0.15, 0.5, 0.85].forEach((at, i) =>
+      top.openings.push({ id: `w${i}`, at, type: 'window', width: 80, flip: 0, side: 0 }));
+    expect(planFacts(f).windowSides).toEqual([['north', 3]]);
+  });
+
+  it('reports exactly the two glazed elevations of a rectangle', () => {
+    const { f } = rect();
+    const byY = (y: number) => f.walls.find(w => w.a.y === y && w.b.y === y)!;
+    byY(0).openings.push({ id: 'a', at: 0.3, type: 'window', width: 80, flip: 0, side: 0 });
+    byY(1000).openings.push({ id: 'b', at: 0.7, type: 'window', width: 80, flip: 0, side: 0 });
+    const sides = planFacts(f).windowSides.map(([d]) => d);
+    expect(sides.sort()).toEqual(['north', 'south']);
+    expect(sides.some(d => d.includes('-'))).toBe(false);
+  });
+
+  it('says so plainly rather than listing five or more elevations', () => {
+    const p = blankProject('x', false);
+    const f = p.floors[0];
+    f.walls.forEach(w => { w.openings = []; });
+    /* an octagon-ish shell: one glazed wall facing each way */
+    f.walls.length = 0;
+    const R = 400;
+    for (let i = 0; i < 8; i++) {
+      const a = { x: R * Math.cos((i / 8) * 6.2832), y: R * Math.sin((i / 8) * 6.2832) };
+      const b = { x: R * Math.cos(((i + 1) / 8) * 6.2832), y: R * Math.sin(((i + 1) / 8) * 6.2832) };
+      f.walls.push({ id: `w${i}`, a, b, t: 20,
+        openings: [{ id: `o${i}`, at: 0.5, type: 'window', width: 100, flip: 0, side: 0 }] });
+    }
+    expect(planFacts(f).windowSides.length).toBeGreaterThanOrEqual(5);
+    const out = buildPrompt(p, f, { view: 'top', furniture: false, dimensions: false });
+    expect(out).toMatch(/nearly every elevation/i);
+    expect(out).not.toMatch(/Windows on the .*and.*sides/);
+  });
+});
+
+describe('the area headline stays coherent with the footprint', () => {
+  it('drops the room total when the rooms do not account for the building', () => {
+    const p = blankProject('Open plan', false);
+    const f = p.floors[0];
+    /* 8 × 10 m of walls, but only a 1 m² polygon drawn */
+    f.areas[0].poly = [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }];
+    expect(planFacts(f).mapped).toBe(false);
+
+    const out = buildPrompt(p, f, { view: 'top', furniture: false, dimensions: true });
+    const subject = out.split('\n')[3];
+    expect(subject).toContain('overall footprint 8.0 × 10.0 m');
+    expect(subject).not.toMatch(/m² over/);          // no 1.0 m² inside an 80 m² shell
+  });
+
+  it('keeps the total when the rooms do cover the plan, and counts them properly', () => {
+    const p = blankProject('Mapped', false);
+    const f = p.floors[0];
+    f.areas[0].name = 'Woonkamer';
+    expect(planFacts(f).mapped).toBe(true);
+    const subject = buildPrompt(p, f, { view: 'top', furniture: false, dimensions: true })
+      .split('\n')[3];
+    expect(subject).toMatch(/80\.0 m² over 1 named room, overall footprint 8\.0 × 10\.0 m/);
+  });
+});
+
+describe('objects say where they are', () => {
+  /* A comma-separated bag of nouns leaves placement to the model, and it moves
+     things: a fireplace drawn on the left wall came back mid-floor. */
+  const b = { x0: 0, y0: 0, x1: 600, y1: 1200 };
+  const at = (x: number, y: number) => placeOf({ ...makeItem('chair', { x, y }) }, b);
+
+  it('names the cell of the plan, not a coordinate', () => {
+    expect(at(40, 300)).toBe('against the left wall, upper');
+    expect(at(100, 100)).toBe('top-left');          // 1 m in is not "against"
+    expect(at(300, 50)).toBe('against the top wall, centre');
+    expect(at(300, 600)).toBe('the middle of the floor');
+    expect(at(150, 600)).toBe('middle-left');
+    expect(at(450, 600)).toBe('middle-right');
+    expect(at(300, 1160)).toBe('against the bottom wall, centre');
+    expect(at(560, 600)).toBe('against the right wall, middle');
+  });
+
+  it('prefers the wall an object is pressed against', () => {
+    /* 40 cm from the left edge is against that wall, whatever cell it is in */
+    expect(at(40, 200)).toMatch(/^against the left wall/);
+    expect(at(40, 1000)).toMatch(/^against the left wall/);
+    /* and 2 m in from it is not */
+    expect(at(150, 300)).not.toMatch(/against/);
+  });
+
+  it('lists them in the order a plan is read, top to bottom', () => {
+    const p = blankProject('x', false);
+    const f = p.floors[0];
+    f.areas = [];
+    const add = (y: number, name: string) => {
+      const i = makeItem('chair', { x: 400, y });
+      setLabel(i, name);
+      f.items.push(i);
+    };
+    add(900, 'gamma'); add(200, 'alpha'); add(550, 'beta');
+
+    const out = buildPrompt(p, f, { view: 'top', furniture: true, dimensions: false });
+    expect(planFacts(f).loose.map(i => labelOf(i))).toEqual(['alpha', 'beta', 'gamma']);
+    expect(out.indexOf('alpha')).toBeLessThan(out.indexOf('beta'));
+    expect(out.indexOf('beta')).toBeLessThan(out.indexOf('gamma'));
+    /* one line each, with a position — not a comma list */
+    expect(out).not.toMatch(/Elsewhere on the floor/);
+    expect(out).toMatch(/OBJECTS/);
+  });
+
+  it('tells the model a staircase is a staircase', () => {
+    const p = blankProject('x', false);
+    const f = p.floors[0];
+    const i = makeItem('stairU', { x: 400, y: 500 });
+    setLabel(i, 'stairs up');
+    f.items.push(i);
+    const out = buildPrompt(p, f, { view: 'top', furniture: true, dimensions: true });
+    expect(out).toMatch(/staircase goes up to the floor above/);
+    expect(out).toMatch(/not as furniture and not as a corridor/);
+
+    /* and it says so even when the stair sits inside a named room */
+    f.areas[0].name = 'Hal';
+    expect(buildPrompt(p, f, { view: 'top', furniture: true, dimensions: true }))
+      .toMatch(/not as furniture and not as a corridor/);
+  });
+});
+
+describe('object descriptions', () => {
+  /* a fresh project per test — descriptions are written into the document */
+  const plan = () => {
+    const q = parseProject(serializeProject(
+      fmlToProject(fml, { ...parseFundaSource(listing), url: 'https://www.funda.nl/x' }),
+    ))!;
+    return { q, f: q.floors[1] };
+  };
+  const base = { view: 'top' as const, furniture: true, dimensions: true };
+
+  it('is absent on everything by default', () => {
+    const { f } = plan();
+    expect(f.items.some(i => 'desc' in i)).toBe(false);
+    expect(f.areas.some(a => 'desc' in a)).toBe(false);
+    expect(descOf(makeItem('sofa3', { x: 0, y: 0 }))).toBe('');
+    expect(descOf(newArea({ x: 0, y: 0 }, 100, 0))).toBe('');
+  });
+
+  it('removes the field again when emptied, rather than storing ""', () => {
+    const i = makeItem('sofa3', { x: 0, y: 0 });
+    setDesc(i, 'dark green velvet');
+    expect(i.desc).toBe('dark green velvet');
+    setDesc(i, '   ');
+    expect('desc' in i).toBe(false);
+  });
+
+  it('puts a room description into that room\'s line', () => {
+    const { q, f } = plan();
+    const woon = f.areas.find(a => a.name === 'Woonkamer')!;
+    setDesc(woon, 'wide oak floorboards, low winter light');
+    const out = buildPrompt(q, f, base);
+    const line = out.split('\n').find(l => l.startsWith('- Woonkamer'))!;
+    expect(line).toContain('wide oak floorboards, low winter light');
+    /* ends as its own sentence, so it cannot run into the generated prose */
+    expect(line).toMatch(/low winter light\.( |$)/);
+  });
+
+  /* every item on this floor is a fitted one imported from the listing, so a
+     furniture list only exists once something is actually placed */
+  const furnish = (f: ReturnType<typeof plan>['f']) => {
+    const woon = f.areas.find(a => a.name === 'Woonkamer')!;
+    const c = polyCentroid(woon.poly);
+    const sofa = makeItem('sofa3', c);
+    const rug = makeItem('rug', { x: c.x + 1, y: c.y + 1 });
+    f.items.push(sofa, rug);
+    return { woon, sofa, rug };
+  };
+
+  it('puts an object description next to that object, and says to follow it', () => {
+    const { q, f } = plan();
+    const { sofa } = furnish(f);
+    setDesc(sofa, 'dark green velvet, mid-century, low back');
+
+    const out = buildPrompt(q, f, base);
+    const line = out.split('\n').find(l => l.startsWith('- Woonkamer'))!;
+    expect(line).toMatch(/sofa 3-seat \(\d+×\d+ cm\) — dark green velvet, mid-century, low back/);
+    /* a described list carries commas, so its entries separate on semicolons */
+    expect(line).toContain('; ');
+    expect(out).toMatch(/deliberate instructions/i);
+  });
+
+  it('leaves the brief untouched when nothing is described', () => {
+    const { q, f } = plan();
+    furnish(f);
+    const out = buildPrompt(q, f, base);
+    expect(out).not.toMatch(/deliberate instructions/i);
+    const list = out.split('\n').find(l => l.startsWith('- Woonkamer'))!.split('Contains: ')[1];
+    expect(list).toMatch(/, /);        // still comma-joined
+    expect(list).not.toContain(';');
+  });
+
+  it('collapses newlines a user pasted in', () => {
+    const { q, f } = plan();
+    const woon = f.areas.find(a => a.name === 'Woonkamer')!;
+    setDesc(woon, 'oak floors\n\nbrass  fittings\n');
+    const out = buildPrompt(q, f, base);
+    expect(out).toContain('oak floors brass fittings');
+    expect(out.split('\n').filter(l => l.startsWith('- Woonkamer'))).toHaveLength(1);
+  });
+
+  it('surfaces a fitted object once it has a name or a description', () => {
+    const { q, f } = plan();
+    const woon = f.areas.find(a => a.name === 'Woonkamer')!;
+    const c = polyCentroid(woon.poly);
+
+    /* anonymous is noise: the .fml ships dozens of unnamed boxes */
+    const anon = { ...makeItem('sofa3', c), fromFunda: 1 as const, label: '', noLabel: 1 as const };
+    f.items.push(anon);
+    expect(buildPrompt(q, f, base)).not.toMatch(/sofa 3-seat/i);
+
+    /* but a name the user typed is the opposite — leaving the staircase out of
+       the text is how a render grows a corridor that is not in the plan */
+    const named = { ...makeItem('sofa3', c), fromFunda: 1 as const, label: 'Kitchen run' };
+    f.items.push(named);
+    expect(buildPrompt(q, f, base).toLowerCase()).toContain('kitchen run');
+
+    setDesc(named, 'matte black cabinetry, brass handles');
+    expect(buildPrompt(q, f, base)).toContain('matte black cabinetry, brass handles');
+  });
+
+  it('warns that unnamed fitted blocks are joinery, not floor', () => {
+    const { q, f } = plan();
+    expect(planFacts(f).anonFitted).toBeGreaterThan(0);
+    const out = buildPrompt(q, f, base);
+    expect(out).toMatch(/unnamed fitted block/i);
+    expect(out).toMatch(/never open floor, a passage or a corridor/i);
+  });
+
+  it('drops object descriptions with the furniture, but keeps room ones', () => {
+    const { q, f } = plan();
+    const woon = f.areas.find(a => a.name === 'Woonkamer')!;
+    setDesc(woon, 'plastered walls');
+    const sofa = makeItem('sofa3', polyCentroid(woon.poly));
+    setDesc(sofa, 'dark green velvet');
+    f.items.push(sofa);
+
+    const out = buildPrompt(q, f, { ...base, furniture: false });
+    expect(out).toContain('plastered walls');
+    expect(out).not.toContain('dark green velvet');
+  });
+
+  it('survives a save and reload', () => {
+    const { q, f } = plan();
+    setDesc(f.areas[0], 'sunken seating');
+    const back = parseProject(serializeProject(q))!;
+    expect(back.floors[1].areas[0].desc).toBe('sunken seating');
   });
 });
