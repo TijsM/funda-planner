@@ -23,6 +23,7 @@ Playwright, driving the real single-file app in Chrome.
 | `09-focus` | typing character by character in every field, so a component that remounts per keystroke cannot hide behind `fill()` |
 | `10-gate` | the gate, in both of the app's modes: with no Supabase credentials there is no gate at all and a page request lands on the editor; with credentials and no session a page request is redirected to `/login` carrying where it was headed, an API call gets a JSON 401 rather than a redirect a `fetch` cannot read, and the login screen asks for an email address |
 | `11-render` | generating a render against a stubbed provider: the elapsed run, the filmstrip, a reload, the one-credit-per-double-click guard, a failure kept as a retry, the seed field, and the three ways Generate is switched off |
+| `14-clipboard` | copy, duplicate and paste for everything on the plan — walls and their openings, rooms, notes, measures — the system clipboard as the carrier (a paste of somebody else's text left alone), and duplicating a whole floor tab |
 
 `10-gate` and `11-render` need a real server, so both skip themselves unless
 `E2E_TARGET=next`.

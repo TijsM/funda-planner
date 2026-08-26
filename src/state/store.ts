@@ -9,7 +9,7 @@ import { blankProject, migrate, resolveSel } from '@engine/model';
  *  render; the canvas subscribes to everything and repaints imperatively. */
 
 export type Tool = 'select' | 'pan' | 'wall' | 'room' | 'door' | 'window' | 'text' | 'measure';
-export type ModalId = 'import' | 'library' | 'calibrate' | 'render' | null;
+export type ModalId = 'import' | 'library' | 'calibrate' | 'render' | 'shape' | null;
 
 export interface Toast { id: string; text: string; kind?: 'ok' | 'err' }
 
@@ -44,6 +44,10 @@ export interface EditorState {
   trayOpen: boolean;
   /** true while the scale-calibration click sequence is running */
   calibrating: boolean;
+  /** what the tray was searching for when nobody found it — the name the shape
+   *  editor opens with, because a person who typed "kliko" and got nothing has
+   *  already said what they are drawing. */
+  shapeSeed: string;
   toasts: Toast[];
   undo: string[];
   redo: string[];
@@ -93,6 +97,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   dirty: false,
   savedId: null,
   modal: null,
+  shapeSeed: '',
   trayOpen: false,
   calibrating: false,
   toasts: [],

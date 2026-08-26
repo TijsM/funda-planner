@@ -9,6 +9,7 @@ import {
 import { hitTest, nearestWall } from '@engine/hit';
 import { closestOnSeg, clamp, dist, R2, rotPt } from '@engine/geometry';
 import { setLabel } from '@engine/model';
+import { isCustomKind } from '@engine/custom';
 import type { Area, Handle, Item, Pt, SelObj, Wall } from '@engine/types';
 import {
   addOpeningTo, commitDraft, placeCatalogItem, placeSpecial, type SpecialKind,
@@ -63,7 +64,14 @@ export function Canvas() {
       marquee: s.marquee,
       snapHint: s.snapHint,
       place: s.place && !s.place.startsWith('draw:') && s.mouseInside
-        ? { kind: s.place, x: s.mouseWorld.x, y: s.mouseWorld.y }
+        ? {
+          kind: s.place, x: s.mouseWorld.x, y: s.mouseWorld.y,
+          /* Attached here rather than looked up in the renderer: this is the one
+             place that has both the armed kind and the project it was drawn in. */
+          ...(isCustomKind(s.place)
+            ? { shape: (s.project?.shapes ?? []).find(x => x.id === s.place) }
+            : {}),
+        }
         : null,
     });
   }, []);

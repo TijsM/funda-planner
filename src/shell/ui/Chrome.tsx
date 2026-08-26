@@ -10,7 +10,8 @@ import { exportJson, exportPng } from '../files';
 import { saveProject, writeRendersBar } from '../storage';
 import { libraryList } from '../library';
 import { currentEmail, signOut } from '../account';
-import { addFloor, deleteSelection, removeFloor } from '../commands';
+import { addFloor, deleteSelection, duplicateFloor, removeFloor } from '../commands';
+import { pasteFromClipboard } from '../clipboard';
 import { Icon } from './Icons';
 
 export function TopBar() {
@@ -149,6 +150,14 @@ export function ToolRail() {
       <div className="rail-sep" />
       <button className="tool" id="btnUndo" title="Undo  (⌘Z)" onClick={() => ed().undoStep()}><Icon id="i-undo" /></button>
       <button className="tool" id="btnRedo" title="Redo  (⇧⌘Z)" onClick={() => ed().redoStep()}><Icon id="i-redo" /></button>
+      {/* The toolbar on an object can copy, but nothing there can paste — there
+          is no object to hang the button on until after the paste. So it lives
+          here, beside the other actions that are about the plan rather than
+          about one thing on it. */}
+      <button
+        className="tool" id="btnPaste" title="Paste  (⌘V)"
+        onClick={() => { void pasteFromClipboard(); }}
+      ><Icon id="i-copy" /></button>
       <button className="tool" id="btnDel" title="Delete selection  (⌫)" onClick={deleteSelection}><Icon id="i-trash" /></button>
     </nav>
   );
@@ -191,6 +200,11 @@ export function FloorBar({ onFit }: { onFit: () => void }) {
         className="fbtn" id="fAddFloor" title="Add a floor above this one"
         onClick={addFloor}
       ><Icon id="i-plus" />Floor</button>
+      <button
+        className="fbtn" id="fDupFloor"
+        title="Duplicate this floor — walls, rooms, furniture and all"
+        onClick={() => duplicateFloor(ed().floorIndex)}
+      ><Icon id="i-dup" /></button>
       <button
         className="fbtn dgr" id="fDelFloor" title="Delete the floor you are on"
         onClick={() => {

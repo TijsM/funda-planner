@@ -10,6 +10,11 @@ test-results/
 results.json
 *.log
 
+# eval sweeps: PNGs by the hundred, and each run is reproducible from its own
+# manifest. eval/baseline.json is committed and must stay so — it is the only
+# thing every `pnpm eval:diff` is measured against.
+eval/runs/
+
 # macOS
 .DS_Store
 

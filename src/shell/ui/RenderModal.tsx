@@ -3,16 +3,20 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ed, useEditor, useSelection } from '@state/store';
 import {
-  SEED_MAX, applySettings, busy, outputDims, parseSeed, promptKeyOf, randomSeed, rs, settingsOf,
-  useRenders,
+  SEED_MAX, applySettings, attachedControls, busy, outputDims, parseSeed,
+  promptControls, promptKeyOf, randomSeed, rs, settingsOf, useRenders,
 } from '@state/renders';
-import { buildPrompt, planFacts, type ViewKind } from '@engine/prompt';
+import { STYLE_PRESETS, buildPrompt, planFacts, type ViewKind } from '@engine/prompt';
 import { polyArea } from '@engine/geometry';
 import { fmtM2 } from '@engine/geometry';
 import { slug } from '@engine/io/serialize';
 import { isCloud } from '@data/config';
 import { RESIGN_EVERY_MS } from '@data/cloudRenders';
-import { download, renderFloorCanvas } from '../files';
+import {
+  CONTROL_KINDS, DEFAULT_PROVIDER, MAX_USD_PER_IMAGE, PROVIDER_META, estimateUsd, metaOf,
+  type ControlKind,
+} from '@data/providers';
+import { download, referenceOpts, renderFloorCanvas } from '../files';
 import { deleteRender, renderBlob, succeeded, totalBytes, type RenderRecord } from '../renders';
 import { refreshRenders, startRender } from '../jobs';
 import { Icon } from './Icons';
@@ -24,6 +28,46 @@ const VIEWS: { v: ViewKind; label: string }[] = [
   { v: 'iso', label: 'Isometric' },
   { v: 'sketch', label: 'Sketch' },
 ];
+
+/** What each map is, in the words of someone deciding whether to send it. The
+ *  `title` is where the mechanism goes — the button has room for one word. */
+const MAPS: Record<ControlKind, { label: string; title: string }> = {
+  line: {
+    label: 'Line',
+    title: 'A black-on-white drawing of every wall, opening and object edge. The closest thing '
+      + 'to what a line ControlNet was trained on.',
+  },
+  depth: {
+    label: 'Depth',
+    title: 'Brighter is higher above the floor, cut at 1.2 m like the plan itself. What a '
+      + 'dollhouse tilt gets wrong is exactly what this channel fixes, if the model reads it.',
+  },
+  seg: {
+    label: 'Segments',
+    title: 'One flat colour per room and per object group. Says where a room ends without '
+      + 'saying what it is made of.',
+  },
+  change: {
+    label: 'Changes',
+    title: 'White may be re-rendered, black must come through unchanged: walls and openings '
+      + 'frozen, loose furniture free, open floor the model\'s to fill.',
+  },
+};
+
+/** Money, at the precision the figure deserves: a cent is three decimals, and a
+ *  provider that charges two thirds of one is not "$0.01". */
+const usd = (n: number | null): string =>
+  n === null ? 'price not published' : `$${n.toFixed(n < 0.01 ? 4 : 3)}`;
+
+const listOf = (ks: readonly ControlKind[]): string =>
+  ks.map(k => MAPS[k].label.toLowerCase()).join(', ');
+
+/** "line, depth or segments" — for the list of kinds a provider *would* take,
+ *  which is an either/or and reads as a promise of all three with a comma. */
+const orList = (ks: readonly ControlKind[]): string => {
+  const names = ks.map(k => MAPS[k].label.toLowerCase());
+  return names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} or ${names[names.length - 1]}`;
+};
 
 export function RenderModal() {
   const project = useEditor(s => s.project);
@@ -41,6 +85,10 @@ export function RenderModal() {
   const dimensions = useRenders(s => s.dimensions);
   const roomLabels = useRenders(s => s.roomLabels);
   const imgMeasures = useRenders(s => s.imgMeasures);
+  const imgLabels = useRenders(s => s.imgLabels);
+  const provider = useRenders(s => s.provider);
+  const controls = useRenders(s => s.controls);
+  const controlScale = useRenders(s => s.controlScale);
   const prompt = useRenders(s => s.prompt);
   const seed = useRenders(s => s.seed);
   const seedLocked = useRenders(s => s.seedLocked);
@@ -102,15 +150,30 @@ export function RenderModal() {
   }, [renders]);
 
   const settings = useMemo(
-    () => settingsOf({ view, room, style, furniture, dimensions, roomLabels, imgMeasures }),
-    [view, room, style, furniture, dimensions, roomLabels, imgMeasures],
+    () => settingsOf({
+      view, room, style, furniture, dimensions, roomLabels, imgMeasures, imgLabels,
+      provider, controls, controlScale,
+    }),
+    [view, room, style, furniture, dimensions, roomLabels, imgMeasures, imgLabels,
+      provider, controls, controlScale],
   );
   const promptKey = project && floor ? promptKeyOf(project.id, floor.id, rev, settings) : '';
 
+  /* The brief names the maps that travel as pictures, and only those — the exact
+     array `jobs.ts` attaches, in the same order, because the sentences say "image
+     2" and "image 3" and the numbering has to match what actually went. On a
+     provider with a real control channel that list is empty: the map goes into
+     the channel rather than into the model's stack of references, and on z-image
+     it replaces the reference outright. */
+  const brief = useMemo(
+    () => ({ ...settings, controls: promptControls(provider, controls) }),
+    [settings, provider, controls],
+  );
+
   const rebuild = useCallback(() => {
     if (!project || !floor) return;
-    rs().patch({ prompt: buildPrompt(project, floor, settings), promptKey });
-  }, [project, floor, settings, promptKey]);
+    rs().patch({ prompt: buildPrompt(floor, brief), promptKey });
+  }, [project, floor, brief, promptKey]);
 
   useEffect(() => {
     /* Only when the settings that produced it have moved. The prompt survives a
@@ -119,14 +182,16 @@ export function RenderModal() {
     if (rs().promptKey !== promptKey || !rs().prompt.trim()) rebuild();
   }, [promptKey, rebuild]);
 
+  /* `referenceOpts` and not an options literal: `jobs.ts` frames every control map
+     with the same call, and two hand-written option objects drifted the moment
+     one of them gained a toggle. A map framed differently from this picture is
+     geometry for a plan that was never sent. */
   useEffect(() => {
     if (!floor) return;
-    const cv = renderFloorCanvas(floor, {
-      clean: true, furniture, roomLabels, measures: imgMeasures, maxPx: 1800,
-    });
+    const cv = renderFloorCanvas(floor, referenceOpts({ furniture, roomLabels, imgMeasures, imgLabels }));
     setCanvas(cv);
     setImg(cv ? cv.toDataURL('image/png') : '');
-  }, [floor, furniture, roomLabels, imgMeasures, rev]);
+  }, [floor, furniture, roomLabels, imgMeasures, imgLabels, rev]);
 
   /* Open on the reference image, never on whichever render was selected last
      time. The right pane is what the next Generate is built from — a previous
@@ -151,7 +216,18 @@ export function RenderModal() {
      hand at all, and the blob test used to be what put it on the stage. */
   const shown = selected && succeeded(selected) ? selected : null;
   const parent = parentId ? renders.find(r => r.id === parentId) ?? null : null;
-  const out = canvas ? outputDims(canvas.width, canvas.height) : null;
+  const meta = metaOf(provider);
+  /* Per provider, because the spending ceiling is not the same size everywhere:
+     the same plan comes back at 1.43 MP of headroom on [max] and exactly 1 MP on
+     flux-general, which bills rounded up to whole megapixels. Quoting one
+     provider's size against another's price is how a picker lies. */
+  const out = canvas ? outputDims(canvas.width, canvas.height, provider) : null;
+  const cost = out ? estimateUsd(meta, out.width, out.height) : null;
+  /* What will actually be sent, and what will not. The second half matters as
+     much as the first: a map that was ticked and silently dropped is a choice
+     taken away from whoever ticked it. */
+  const attached = attachedControls(provider, controls);
+  const dropped = controls.filter(k => !attached.includes(k));
   const seedNum = parseSeed(seed);
   const canGenerate = !busy({ jobs, sessionCount }) && !!prompt.trim() && !!canvas;
 
@@ -208,6 +284,16 @@ export function RenderModal() {
     await refreshRenders();
   };
 
+  /* Appended, never rebuilt from CONTROL_KINDS: the array's order IS the attach
+     order, image 2 is whichever map was ticked first, and the brief numbers them
+     off the same list. Sorting this into a canonical order would renumber the
+     sentences under the prompt someone has already read. */
+  const toggleMap = (k: ControlKind) => {
+    rs().patch({
+      controls: controls.includes(k) ? controls.filter(x => x !== k) : [...controls, k],
+    });
+  };
+
   const useSettingsOf = (rec: RenderRecord) => {
     rs().patch(applySettings(rec, project.id, rev));
     ed().toast(`Settings from #${numberOf(rec.id) ?? 1} loaded — the next render is recorded as its child.`, 'ok');
@@ -250,9 +336,108 @@ export function RenderModal() {
             <div className="row" style={{ marginBottom: 2 }}>
               <span className="lbl">Style</span>
               <div className="fields"><div className="fld wide">
-                <input id="aiStyle" spellCheck={false} placeholder="e.g. Scandinavian, warm oak, matte black accents"
+                <input id="aiStyle" list="aiStyles" spellCheck={false} placeholder="e.g. Scandinavian, warm oak, matte black accents"
                   value={style} onChange={e => rs().patch({ style: e.target.value })} onKeyDown={e => e.stopPropagation()} />
+                {/* Suggestions, never a closed list: a named one is expanded into
+                    concrete materials in the prompt, anything else goes through
+                    verbatim exactly as it always did. */}
+                <datalist id="aiStyles">
+                  {STYLE_PRESETS.map(s => <option key={s.label} value={s.label} />)}
+                </datalist>
               </div></div>
+            </div>
+
+            <div className="row" style={{ marginTop: 8, marginBottom: 2 }}>
+              <span className="lbl">Model</span>
+              <div className="fields"><div className="fld wide">
+                <select id="aiProvider" value={provider} onChange={e => rs().patch({ provider: e.target.value })}>
+                  {PROVIDER_META.map(p => {
+                    /* Each provider's price at its OWN largest affordable size, so the
+                       figures in the list are comparable and none of them quotes a
+                       resolution that provider would be refused for. */
+                    const d = canvas ? outputDims(canvas.width, canvas.height, p.id) : null;
+                    return (
+                      <option key={p.id} value={p.id}>
+                        {p.label} — {d ? usd(estimateUsd(p, d.width, d.height)) : usd(p.usdPerMegapixel)}
+                        {d ? '' : '/MP'}
+                      </option>
+                    );
+                  })}
+                </select>
+              </div></div>
+            </div>
+            <div className="hint" id="aiProviderNote">
+              {meta.note}
+              {out && (
+                <>
+                  <br />{usd(cost)} for {out.width}×{out.height}
+                  {' '}({(out.width * out.height / 1e6).toFixed(1)} MP), against a
+                  {' '}{usd(MAX_USD_PER_IMAGE)} ceiling per image.
+                </>
+              )}
+              {meta.acceptsControls.length === 0 && (
+                <>
+                  <br />No control channel: this model reads every image as a reference and has no
+                  {' '}strength dial. Maps sent to it are a hypothesis, not a constraint.
+                </>
+              )}
+              {/* Only when it is a different key from the one that already works, and
+                  compared against the default provider rather than a literal — the
+                  browser cannot see the server's environment, so this is the only
+                  warning available before the render fails for want of a variable. */}
+              {meta.needsEnv !== metaOf(DEFAULT_PROVIDER).needsEnv && (
+                <>
+                  <br />Needs <b>{meta.needsEnv}</b> set on the server. Generate says so by name if it
+                  {' '}is not.
+                </>
+              )}
+            </div>
+
+            <div className="row" style={{ marginBottom: 2 }}>
+              <span className="lbl">Maps</span>
+              <div className="seg" id="aiControls">
+                {CONTROL_KINDS.map(k => (
+                  <button key={k} data-k={k} title={MAPS[k].title}
+                    className={controls.includes(k) ? 'on' : ''} onClick={() => toggleMap(k)}>
+                    {MAPS[k].label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {meta.acceptsControls.length > 0 && attached.length > 0 && (
+              <div className="row" style={{ marginBottom: 2 }}>
+                <span className="lbl">Strength</span>
+                <div className="fields"><div className="fld wide">
+                  <input type="range" id="aiCtlScale" min={0} max={1} step={0.05} value={controlScale}
+                    onChange={e => rs().patch({ controlScale: Number(e.target.value) })} />
+                  <u>{controlScale.toFixed(2)}</u>
+                </div></div>
+              </div>
+            )}
+            <div className="hint" id="aiControlNote">
+              {!attached.length
+                ? <>Nothing attached — the reference image is all the model is given, and its
+                  {' '}geometry is read as a suggestion. Drawn from the same vectors as the plan, so
+                  {' '}a map costs nothing to send.</>
+                : meta.acceptsControls.length
+                  ? <>The <b>{listOf(attached)}</b> map goes into this model&rsquo;s control channel at
+                    {' '}strength {controlScale.toFixed(2)} — a real constraint on the geometry, with a
+                    {' '}dial. Not tuned: 0.75 is the vendor&rsquo;s default and the harness is what
+                    {' '}moves it.</>
+                  : <><b>{listOf(attached)}</b> {attached.length === 1 ? 'rides' : 'ride'} along as
+                    {' '}extra reference {attached.length === 1 ? 'image' : 'images'}, named in the
+                    {' '}prompt so the model does not paint the map itself. Whether it uses them as
+                    {' '}geometry is unproven — this model has no control input, and the render is
+                    {' '}what will tell us.</>}
+              {dropped.length > 0 && (
+                <>
+                  {' '}<b>{listOf(dropped)}</b> {dropped.length === 1 ? 'is' : 'are'} not sent:
+                  {meta.acceptsControls.length
+                    ? ` this model takes one map at a time, and only ${orList(meta.acceptsControls)}.`
+                    : ' two is the limit, because each map costs the brief a sentence in an opening'
+                      + ' block that is read for about eighty words.'}
+                </>
+              )}
             </div>
 
             <label className="tg">
@@ -270,6 +455,10 @@ export function RenderModal() {
             <label className="tg">
               <input type="checkbox" id="aiLabels" checked={roomLabels} onChange={e => rs().patch({ roomLabels: e.target.checked })} />
               <span className="sw2" /><span>Room names on the image</span>
+            </label>
+            <label className="tg">
+              <input type="checkbox" id="aiImgLabels" checked={imgLabels} onChange={e => rs().patch({ imgLabels: e.target.checked })} />
+              <span className="sw2" /><span>Object names on the image</span>
             </label>
 
             <textarea className="src" id="aiPrompt" spellCheck={false} style={{ marginTop: 10 }}
@@ -329,6 +518,13 @@ export function RenderModal() {
                   Generate now does for you — but the copy buttons are still the way out to
                   any other generator, so the sentence explains the picture instead. */}
               The layout every render is held to. <b>Copy image</b> takes it elsewhere.
+              {imgLabels && (
+                <>
+                  <br />The object names tell the model which block is which, and the prompt
+                  {' '}calls them a key to read rather than draw. If one shows up written into a
+                  {' '}render, turn <b>Object names on the image</b> off.
+                </>
+              )}
               {imgMeasures && (
                 <>
                   <br />Lettering on the reference can bleed into the render — turn
@@ -398,12 +594,21 @@ export function RenderModal() {
         <div className="m-f">
           <button className="btn" id="aiRegen" onClick={rebuild}><Icon id="i-rot" />Rebuild prompt</button>
           <span className="hint mono" id="aiSession">
-            {sessionCount} this session{out ? ` · ${out.width}×${out.height}` : ''}
+            {sessionCount} this session
           </span>
           <div className="spring" />
           <button className="btn" id="aiCopyImg" onClick={copyImage}><Icon id="i-copy" />Copy image</button>
           <button className="btn" id="aiDlImg" onClick={downloadImage}><Icon id="i-dl" />Image</button>
           <button className="btn" id="aiCopy" onClick={copyPrompt}><Icon id="i-copy" />Copy prompt</button>
+          {/* Beside the button that spends it, not in a panel someone has to go and
+              read: the size moved here from the session counter because the price
+              is a function of it, and the two belong in one glance. */}
+          {out && (
+            <span className="hint mono" id="aiCost" title={`${meta.label} at ${out.width}×${out.height}`}>
+              {usd(cost)} · {out.width}×{out.height}
+              {attached.length ? ` · +${attached.length} map${attached.length === 1 ? '' : 's'}` : ''}
+            </span>
+          )}
           <button className="btn pri" id="aiGen" disabled={!canGenerate} onClick={() => void startRender(canvas)}>
             <Icon id="i-spark" />{job ? `Rendering ${elapsed}s` : 'Generate'}
           </button>

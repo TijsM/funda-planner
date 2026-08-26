@@ -12,7 +12,10 @@
     "verify:supabase": "node scripts/verify-supabase.mjs",
     "test:e2e:gate": "E2E_GATE=1 playwright test",
     "test:e2e:live": "E2E_LIVE=1 playwright test",
-    "signin:code": "node scripts/signin-code.mjs"
+    "signin:code": "node scripts/signin-code.mjs",
+    "eval": "node scripts/eval/run.mjs",
+    "eval:score": "node scripts/eval/score.mjs",
+    "eval:diff": "node scripts/eval/diff.mjs"
   },
   "packageManager": "pnpm@10.18.0",
   "dependencies": {
@@ -25,12 +28,14 @@
     "zustand": "^5.0.15"
   },
   "devDependencies": {
+    "@napi-rs/canvas": "^1.0.7",
     "@playwright/test": "^1.62.1",
     "@types/node": "^26.2.0",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "fake-indexeddb": "^6.2.5",
     "jsdom": "^30.0.1",
+    "tesseract.js": "^7.0.0",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
   }

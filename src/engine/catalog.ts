@@ -10,6 +10,8 @@ export interface CatalogEntry {
   /** extra words the tray search should match — synonyms, and the Dutch a
    *  person working from a Funda listing is likely to type. Never displayed. */
   alt?: string;
+  /** centimetres above the floor, filled from `Z` — see the comment there. */
+  z?: number;
 }
 
 /* ── drawing primitives ─────────────────────────────────────────── */
@@ -40,7 +42,7 @@ const CHAIR_OFF = 22;
  *  how a "Round 6p" got rendered with eight. `render.test.ts` counts what the
  *  glyphs draw and fails if this drifts from it. */
 export const SEATS: Record<string, number> = {
-  dt4: 4, dt6: 6, dt8: 8, dtr: 6, ktable: 4, ktable2: 2, gtable: 6,
+  dt4: 4, dt6: 6, dt8: 8, dtr: 6, dtr4: 4, ktable: 4, ktable2: 2, gtable: 6,
 };
 
 /* generic glyph builders */
@@ -208,6 +210,11 @@ const RAW: [string, [string, string, number, number, Glyph, string?][]][] = [
     ['tvstand', 'TV unit',     170,  42, (g, w, h) => G.cabinet(g, w, h)],
     ['tv',      'TV',          120,  10, (g, w, h) => { box(g, w, h, 1); g.save(); g.globalAlpha = .4; rr(g, -w * .12, h / 2, w * .24, 6, 1); g.fill(); g.restore(); }],
     ['shelf',   'Bookshelf',    90,  32, (g, w, h) => { box(g, w, h, 1); g.save(); g.globalAlpha = .35; for (let i = 1; i < 4; i++) ln(g, -w / 2 + i * w / 4, -h / 2, -w / 2 + i * w / 4, h / 2); g.restore(); }],
+    /* Not the Wardrobe (that one is the bedroom's, and 62 deep for hangers) and
+       not the kitchen's Tall cabinet: the hall and utility cupboard a Dutch plan
+       calls a kast, which every one of these floors has and none of them could
+       draw. Deep enough to swallow a vacuum, shallow enough to sit in a corridor. */
+    ['cupbrd',  'Cupboard',     90,  55, (g, w, h) => G.cabinet(g, w, h, 2), 'kast opbergkast storage closet linen broom utility hal'],
     ['rug',     'Rug',         240, 170, (g, w, h) => { g.save(); g.setLineDash([9, 6]); box(g, w, h, 4); g.restore(); }],
     ['lamp',    'Floor lamp',   42,  42, (g, w) => { ci(g, 0, 0, w / 2); g.save(); g.globalAlpha = .5; ci(g, 0, 0, w / 6, 1); g.restore(); }],
     ['piano',   'Piano',       152, 112, (g, w, h) => { box(g, w, h, 3); g.save(); g.globalAlpha = .45; rr(g, -w / 2 + 4, h / 2 - 16, w * .62, 12, 1); g.fill(); g.restore(); }],
@@ -222,8 +229,15 @@ const RAW: [string, [string, string, number, number, Glyph, string?][]][] = [
     ['dt6',   'Table 6p',  180,  90, (g, w, h) => { G.chairs(g, w, h, 3); G.table(g, w, h); }],
     ['dt8',   'Table 8p',  220, 100, (g, w, h) => { G.chairs(g, w, h, 4); G.table(g, w, h); }],
     /* "Round 6p" is the only word here a search for "round table" can match, and
-       nobody types the name of a thing they are still looking for. */
+       nobody types the name of a thing they are still looking for.
+
+       The 4p is 110 rather than the kitchen's 100: the same table with room to
+       lay it, which is the difference between the two entries — Kitchen's
+       "Round table 4p" is the breakfast one. Both exist because the tray is read
+       by group, and someone furnishing a dining room should not have to know the
+       four-seater is filed under Kitchen. */
     ['dtr',   'Round 6p',  130, 130, (g, w) => { G.rchairs(g, w, 6); G.round(g, w); }, 'round table circular ronde tafel eettafel dining'],
+    ['dtr4',  'Round 4p',  110, 110, (g, w) => { G.rchairs(g, w, 4); G.round(g, w); }, 'round table circular ronde tafel eettafel dining four'],
     ['chair', 'Chair',      46,  48, (g, w, h) => { box(g, w, h, 3); g.save(); g.globalAlpha = .45; rr(g, -w / 2, -h / 2, w, 8, 2); g.fill(); g.restore(); }],
     ['stool', 'Bar stool',  38,  38, (g, w) => G.round(g, w), 'round circular barkruk kruk'],
     ['sideb', 'Sideboard', 180,  45, (g, w, h) => G.cabinet(g, w, h, 3)],
@@ -348,6 +362,76 @@ const RAW: [string, [string, string, number, number, Glyph, string?][]][] = [
   ]],
 ];
 
+/** Height in centimetres of every catalogue object, for the depth pass.
+ *
+ *  This is the object's dominant upper surface — the plane a camera looking
+ *  straight down actually lands on — and not the tallest sliver of its
+ *  silhouette. So a bed is its mattress and not its headboard, a toilet its
+ *  seat and not its cistern, a shower its tray and not its glass: a headboard
+ *  is a hand's width of the footprint, and a bed reading as deep as a wardrobe
+ *  is a lie the control map has no way to walk back.
+ *
+ *  Only the ORDER survives into the render — the depth pass ramps these to grey
+ *  levels — so these are plausible figures rather than surveyed ones, and the
+ *  thing to protect when editing is that a wardrobe stays taller than a
+ *  worktop, a worktop than a dining table, a dining table than a coffee table.
+ *  Anything genuinely at floor level (rugs, paving, the water in a pool) is 0-2
+ *  and must stay a number rather than being left out; `heightOf` reads these
+ *  with ?? precisely so a 0 is not swallowed by a group default. */
+export const Z: Record<string, number> = {
+  /* Living */
+  sofa2: 85, sofa3: 85, sofaL: 85, sofaChaise: 82, armchair: 85, pouf: 42,
+  coffee: 40, sidetbl: 55, tvstand: 45, tv: 115, shelf: 180, cupbrd: 200, rug: 2, lamp: 160,
+  piano: 100, fireplc: 105,
+  /* Dining — a chair is its backrest, which is why it out-tops the table it
+     tucks under; a bar stool has no back, so it does not. */
+  dt4: 75, dt6: 75, dt8: 75, dtr: 75, dtr4: 75, chair: 90, stool: 75, sideb: 85, bar: 105,
+  /* Bedroom */
+  bed90: 55, bed140: 55, bed160: 58, bed180: 58, bunk: 160, crib: 95,
+  nstand: 55, wardr: 200, dresser: 80, desk: 75, ochair: 95, mirror: 170,
+  /* Kitchen — everything under the run reads as the worktop that covers it,
+     because from above that is the surface, and a dishwasher sunk to its own
+     82 would punch a hole in an otherwise flat counter. */
+  kcount: 90, kcorner: 90, kisland: 90, sink: 90, sink2: 90, hob: 92, oven: 90,
+  fridge: 185, fridge2: 180, dishw: 90, hood: 150, pantry: 220,
+  ktable: 75, ktable2: 75,
+  /* Bathroom */
+  toilet: 45, basin: 88, basin2: 88, bath: 58, shower: 5, showerW: 3,
+  washer: 85, dryer: 85, radiator: 60, towel: 120,
+  /* Structure — these run floor to ceiling, so they are the storey itself. */
+  stairU: 260, stairS: 260, column: 260, colR: 260, duct: 260, hatch: 260,
+  meter: 200,
+  /* Decoration — a plant is the plant, not the pot it stands in. */
+  potS: 45, potM: 70, potL: 110, potXL: 160, potTall: 140, potTrio: 60,
+  hangPlant: 190, planterBox: 60, vase: 35, bowl: 12, rugRound: 2, art: 150,
+  mirrorW: 160, clock: 200, sculpt: 45, candles: 20, screen: 170, coatrack: 175,
+  basket: 40, petbed: 18, shoerack: 45,
+  /* Garden */
+  gpotR: 90, gpotXL: 130, bedRound: 40, firepit: 40, birdbath: 90, water: 45,
+  lantern: 45, hammock: 45, swing: 190, sandbox: 30, compost: 90, barrel: 90,
+  stepstone: 2,
+  /* Garden extras — a pool is 0: its water sits at grade and everything around
+     it is above, which is exactly what the depth map should say. */
+  gtable: 75, lounger: 35, loungeSet: 75, parasol: 250, bbq: 110, bench: 85,
+  tree: 700, treeS: 400, shrub: 120, hedge: 180, planter: 60, bedPlant: 60,
+  lawn: 1, terrace: 2, pool: 0, tramp: 90, shed: 250, pergola: 250, fence: 180,
+  path: 1, bin: 110, bike: 110, car: 150,
+};
+
+/** Fallback height per group, for an object added tomorrow that nobody gave a
+ *  `z`. Every catalogue entry has an explicit height today, so these fire for
+ *  nothing — that is the point: a missing height must still land somewhere
+ *  defensible for its group rather than at a single global number that would
+ *  put a new bathroom fitting level with a wardrobe. */
+export const GROUP_Z: Record<string, number> = {
+  Living: 80, Dining: 75, Bedroom: 90, Kitchen: 90, Bathroom: 60,
+  Structure: 210, Decoration: 40, Garden: 60, 'Garden extras': 75,
+};
+
+/** Waist height: what an unknown kind gets, so a plan saved by a newer build
+ *  that has objects this one has never heard of still renders a depth map. */
+export const DEFAULT_Z = 75;
+
 export const GROUP_TONE: Record<string, string> = { Living: '#C7A44E', Dining: '#C7A44E', Bedroom: '#B08BB0', Kitchen: '#8FA9C4',
   Bathroom: '#6FA8B5', Structure: '#8C857A', Garden: '#7E9B5B', 'Garden extras': '#7E9B5B', Decoration: '#8FA98F' };
 export const SWATCHES = ['#C7A44E', '#E4632C', '#B08BB0', '#8FA9C4', '#6FA8B5', '#7E9B5B', '#8C857A', '#D14B45', '#5E6B7E', '#A8794E'];
@@ -355,7 +439,7 @@ export const ROOM_SWATCHES = ['#E4DCC5', '#C6B9AA', '#D6C7B4', '#C9D3C0', '#BFCB
 
 export const CATALOG: { group: string; items: CatalogEntry[] }[] = RAW.map(([group, list]) => ({
   group,
-  items: list.map(([kind, name, w, h, draw, alt]) => ({ kind, name, w, h, draw, group, alt })),
+  items: list.map(([kind, name, w, h, draw, alt]) => ({ kind, name, w, h, draw, group, alt, z: Z[kind] })),
 }));
 
 export const CAT_BY_KIND: Record<string, CatalogEntry> = Object.fromEntries(
@@ -363,3 +447,12 @@ export const CAT_BY_KIND: Record<string, CatalogEntry> = Object.fromEntries(
 );
 
 export const toneFor = (e?: CatalogEntry): string => (e && GROUP_TONE[e.group]) || '#8C857A';
+
+/** Centimetres above the floor for a kind: its own height, else its group's
+ *  default, else waist height. */
+export function heightOf(kind: string): number {
+  const e = CAT_BY_KIND[kind];
+  if (!e) return DEFAULT_Z;
+  return e.z ?? GROUP_Z[e.group] ?? DEFAULT_Z;
+}
+

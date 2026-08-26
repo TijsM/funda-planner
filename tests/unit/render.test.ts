@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  CATALOG, CAT_BY_KIND, blankProject, fmlToProject, handlesFor, parseFundaSource, pointInPoly,
-  resolveSel,
+  CATALOG, CAT_BY_KIND, blankProject, fmlToProject, handlesFor, makeItem, parseFundaSource,
+  pointInPoly, resolveSel,
 } from '@engine/index';
 import { SEATS } from '@engine/catalog';
 import { paint } from '@engine/render';
@@ -155,6 +155,24 @@ describe('print measurements', () => {
     expect(calls.fillText ?? 0).toBe(0);
     expect(calls.strokeText ?? 0).toBe(0);
     expect(calls.fill).toBeGreaterThan(20);          // it did draw the plan
+  });
+
+  /* The reference is the only place the model learns which grey block is the
+     staircase: the prompt says where each object is, and the drawing is what
+     gets copied. Off by request, on by default — see `imgLabels`. */
+  it('names every object on the reference when it is asked to', () => {
+    /* the fixture's own items are anonymous fitted blocks, which have no name to
+       print — the whole point of the flag is the ones a person placed */
+    const named = { ...floor, notes: [], items: [makeItem('sofa3', { x: 400, y: 400 })] };
+    const clean = { rooms: true, areas: false, furn: true, dims: false, notes: false };
+
+    const off = recordingCtx();
+    paint(off.ctx as never, { ...base, floor: named, layers: clean, roomLabels: false, objectLabels: false });
+    expect(off.calls.fillText ?? 0).toBe(0);
+
+    const on = recordingCtx();
+    paint(on.ctx as never, { ...base, floor: named, layers: clean, roomLabels: false, objectLabels: true });
+    expect(on.calls.fillText).toBeGreaterThan(0);
   });
 
   it('object labels are on by default, so the print keeps them', () => {

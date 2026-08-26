@@ -33,6 +33,28 @@ export interface Area {
   label: boolean;
 }
 
+/** An object a person drew for themselves, because the catalogue did not have it.
+ *
+ *  The outline is in UNIT space — every point 0..1 on both axes — so one drawing
+ *  serves every size the thing is ever stretched to, and a shape drawn on a 90 cm
+ *  square still reads right at 3 m. Unused space around the ink is cropped: the
+ *  unit square is the drawing's own bounds, not the authoring canvas it was
+ *  clicked on. `round` is a flag rather than forty points because a polygon
+ *  approximating an ellipse looks like a polygon at print size. */
+export interface Shape {
+  /** doubles as the item's `kind`, prefixed so it can never collide with a
+   *  catalogue kind — see CUSTOM_PREFIX in `custom.ts` */
+  id: string;
+  name: string;
+  /** the footprint it is placed at, in centimetres */
+  w: number; h: number;
+  poly?: Pt[];
+  round?: 1;
+  /** centimetres above the floor. Only the depth control map reads it, and it is
+   *  the one number a person cannot infer from a top-down drawing. */
+  z?: number;
+}
+
 export interface Item {
   id: string;
   kind: string;
@@ -49,6 +71,16 @@ export interface Item {
   flip?: 0 | 1;
   /** a fitted object imported from the listing, not something the user placed */
   fromFunda?: 1;
+  /** For a custom object, the drawing itself — copied onto the item at placement
+   *  rather than looked up from the project's list.
+   *
+   *  Inlined on purpose. A lookup is one more thing that can be missing: a plan
+   *  mailed to someone, a shape deleted from the tray, a floor pasted into
+   *  another project would each leave an object nobody can draw, and the renderer
+   *  would fall back to a plain block without saying why. The bytes are a dozen
+   *  points; the alternative is a plan that renders differently depending on what
+   *  else is open. */
+  shape?: Shape;
 }
 
 export interface Note { id: string; x: number; y: number; text: string; size: number; rot: number; color: string }
@@ -89,6 +121,10 @@ export interface Project {
   updatedAt: number;
   source: ProjectSource | null;
   floors: Floor[];
+  /** the custom objects drawn in this plan, which is what the tray offers back.
+   *  Placed items carry their own copy, so deleting one here never breaks a floor
+   *  that already uses it. */
+  shapes?: Shape[];
 }
 
 /* ── things the renderer and hit-testing need, but the document does not ── */

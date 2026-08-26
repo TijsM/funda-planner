@@ -9,6 +9,7 @@ import { isCloud } from '@data/config';
 import { maybePush, startSync } from '@data/sync';
 import { Canvas } from './Canvas';
 import { commitDraft, deleteSelection, duplicateSelection, nudge } from './commands';
+import { clipOfCurrent, pasteClipText, pastePoint, rememberClip } from './clipboard';
 import { adoptUser, autosave, readAutosave, readIndex, readRendersBar, saveProject } from './storage';
 import { readImageFile, readJsonFile } from './files';
 import { importFromUrl } from './funda';
@@ -177,6 +178,49 @@ export function Editor() {
     document.addEventListener('keyup', up);
     return () => { document.removeEventListener('keydown', down); document.removeEventListener('keyup', up); };
   }, [fit]);
+
+  /* ── clipboard ──────────────────────────────────────────────── */
+  /* The browser's own copy/cut/paste events rather than ⌘C/⌘V in the keydown
+     handler above: they carry the clipboard with them, so nothing has to ask
+     for a permission Firefox does not grant and Safari grants only sometimes.
+     A field on the page keeps its own copy and paste — the guard here is the
+     same one the shortcuts use, and for the same reason. */
+  useEffect(() => {
+    const inField = (t: EventTarget | null) => {
+      const el = t as HTMLElement | null;
+      return !!el && (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.isContentEditable);
+    };
+    const write = (e: ClipboardEvent) => {
+      if (inField(e.target) || !e.clipboardData) return false;
+      const cur = clipOfCurrent();
+      if (!cur) return false;
+      e.preventDefault();
+      e.clipboardData.setData('text/plain', cur.text);
+      rememberClip(cur.text);
+      ed().toast(`Copied ${cur.label}.`);
+      return true;
+    };
+    const onCopy = (e: ClipboardEvent) => { write(e); };
+    const onCut = (e: ClipboardEvent) => {
+      /* Only a selection is cut. ⌘X with nothing selected copies the floor, and
+         deleting the floor someone is standing on is not what they asked for. */
+      const had = ed().sel.length;
+      if (write(e) && had) deleteSelection();
+    };
+    const onPaste = (e: ClipboardEvent) => {
+      if (inField(e.target)) return;
+      const txt = e.clipboardData?.getData('text/plain') ?? '';
+      if (pasteClipText(txt, pastePoint())) e.preventDefault();
+    };
+    document.addEventListener('copy', onCopy);
+    document.addEventListener('cut', onCut);
+    document.addEventListener('paste', onPaste);
+    return () => {
+      document.removeEventListener('copy', onCopy);
+      document.removeEventListener('cut', onCut);
+      document.removeEventListener('paste', onPaste);
+    };
+  }, []);
 
   /* ── files dropped anywhere ─────────────────────────────────── */
   useEffect(() => {

@@ -1,0 +1,397 @@
+{
+ "schema": 2,
+ "id": "house-unnamed",
+ "name": "Verbouwing, rooms unnamed",
+ "createdAt": 1787011200000,
+ "updatedAt": 1787011200000,
+ "source": null,
+ "floors": [
+  {
+   "id": "house-unnamed-f0",
+   "name": "Eerste verdieping",
+   "level": 0,
+   "walls": [
+    {
+     "id": "house-unnamed-w0",
+     "a": {
+      "x": 0,
+      "y": 0
+     },
+     "b": {
+      "x": 840,
+      "y": 0
+     },
+     "t": 20,
+     "openings": [
+      {
+       "id": "house-unnamed-o0",
+       "at": 0.25,
+       "type": "window",
+       "width": 160,
+       "flip": 0,
+       "side": 0
+      },
+      {
+       "id": "house-unnamed-o1",
+       "at": 0.75,
+       "type": "window",
+       "width": 160,
+       "flip": 0,
+       "side": 0
+      }
+     ]
+    },
+    {
+     "id": "house-unnamed-w1",
+     "a": {
+      "x": 840,
+      "y": 0
+     },
+     "b": {
+      "x": 840,
+      "y": 700
+     },
+     "t": 20,
+     "openings": []
+    },
+    {
+     "id": "house-unnamed-w2",
+     "a": {
+      "x": 840,
+      "y": 700
+     },
+     "b": {
+      "x": 0,
+      "y": 700
+     },
+     "t": 20,
+     "openings": [
+      {
+       "id": "house-unnamed-o2",
+       "at": 0.3,
+       "type": "window",
+       "width": 160,
+       "flip": 0,
+       "side": 0
+      },
+      {
+       "id": "house-unnamed-o3",
+       "at": 0.7,
+       "type": "window",
+       "width": 160,
+       "flip": 0,
+       "side": 0
+      }
+     ]
+    },
+    {
+     "id": "house-unnamed-w3",
+     "a": {
+      "x": 0,
+      "y": 700
+     },
+     "b": {
+      "x": 0,
+      "y": 0
+     },
+     "t": 20,
+     "openings": [
+      {
+       "id": "house-unnamed-o4",
+       "at": 0.5,
+       "type": "door",
+       "width": 95,
+       "flip": 0,
+       "side": 0
+      }
+     ]
+    },
+    {
+     "id": "house-unnamed-w4",
+     "a": {
+      "x": 0,
+      "y": 420
+     },
+     "b": {
+      "x": 840,
+      "y": 420
+     },
+     "t": 10,
+     "openings": [
+      {
+       "id": "house-unnamed-o5",
+       "at": 0.2,
+       "type": "door",
+       "width": 85,
+       "flip": 0,
+       "side": 0
+      },
+      {
+       "id": "house-unnamed-o6",
+       "at": 0.8,
+       "type": "door",
+       "width": 85,
+       "flip": 0,
+       "side": 0
+      }
+     ]
+    },
+    {
+     "id": "house-unnamed-w5",
+     "a": {
+      "x": 480,
+      "y": 0
+     },
+     "b": {
+      "x": 480,
+      "y": 420
+     },
+     "t": 10,
+     "openings": [
+      {
+       "id": "house-unnamed-o7",
+       "at": 0.5,
+       "type": "door",
+       "width": 85,
+       "flip": 0,
+       "side": 0
+      }
+     ]
+    },
+    {
+     "id": "house-unnamed-w6",
+     "a": {
+      "x": 400,
+      "y": 420
+     },
+     "b": {
+      "x": 400,
+      "y": 700
+     },
+     "t": 10,
+     "openings": [
+      {
+       "id": "house-unnamed-o8",
+       "at": 0.5,
+       "type": "door",
+       "width": 85,
+       "flip": 0,
+       "side": 0
+      }
+     ]
+    }
+   ],
+   "areas": [
+    {
+     "id": "house-unnamed-a0",
+     "poly": [
+      {
+       "x": 0,
+       "y": 0
+      },
+      {
+       "x": 480,
+       "y": 0
+      },
+      {
+       "x": 480,
+       "y": 420
+      },
+      {
+       "x": 0,
+       "y": 420
+      }
+     ],
+     "name": "",
+     "color": "#E4DCC5",
+     "nx": 0,
+     "ny": 0,
+     "label": true
+    },
+    {
+     "id": "house-unnamed-a1",
+     "poly": [
+      {
+       "x": 480,
+       "y": 0
+      },
+      {
+       "x": 840,
+       "y": 0
+      },
+      {
+       "x": 840,
+       "y": 420
+      },
+      {
+       "x": 480,
+       "y": 420
+      }
+     ],
+     "name": "",
+     "color": "#C6B9AA",
+     "nx": 0,
+     "ny": 0,
+     "label": true
+    },
+    {
+     "id": "house-unnamed-a2",
+     "poly": [
+      {
+       "x": 0,
+       "y": 420
+      },
+      {
+       "x": 400,
+       "y": 420
+      },
+      {
+       "x": 400,
+       "y": 700
+      },
+      {
+       "x": 0,
+       "y": 700
+      }
+     ],
+     "name": "",
+     "color": "#D6C7B4",
+     "nx": 0,
+     "ny": 0,
+     "label": true
+    },
+    {
+     "id": "house-unnamed-a3",
+     "poly": [
+      {
+       "x": 400,
+       "y": 420
+      },
+      {
+       "x": 840,
+       "y": 420
+      },
+      {
+       "x": 840,
+       "y": 700
+      },
+      {
+       "x": 400,
+       "y": 700
+      }
+     ],
+     "name": "",
+     "color": "#C9D3C0",
+     "nx": 0,
+     "ny": 0,
+     "label": true
+    }
+   ],
+   "items": [
+    {
+     "id": "house-unnamed-i0",
+     "kind": "bed160",
+     "x": 200,
+     "y": 180,
+     "w": 160,
+     "h": 210,
+     "rot": 0,
+     "color": "#B08BB0",
+     "label": "Queen 160"
+    },
+    {
+     "id": "house-unnamed-i1",
+     "kind": "nstand",
+     "x": 300,
+     "y": 70,
+     "w": 46,
+     "h": 42,
+     "rot": 0,
+     "color": "#B08BB0",
+     "label": "Nightstand"
+    },
+    {
+     "id": "house-unnamed-i2",
+     "kind": "wardr",
+     "x": 120,
+     "y": 45,
+     "w": 160,
+     "h": 62,
+     "rot": 0,
+     "color": "#B08BB0",
+     "label": "Wardrobe"
+    },
+    {
+     "id": "house-unnamed-i3",
+     "kind": "bed90",
+     "x": 600,
+     "y": 150,
+     "w": 90,
+     "h": 200,
+     "rot": 0,
+     "color": "#B08BB0",
+     "label": "Single 90"
+    },
+    {
+     "id": "house-unnamed-i4",
+     "kind": "desk",
+     "x": 760,
+     "y": 330,
+     "w": 140,
+     "h": 70,
+     "rot": 90,
+     "color": "#B08BB0",
+     "label": "Desk"
+    },
+    {
+     "id": "house-unnamed-i5",
+     "kind": "dt4",
+     "x": 200,
+     "y": 560,
+     "w": 120,
+     "h": 80,
+     "rot": 0,
+     "color": "#C7A44E",
+     "label": "Table 4p"
+    },
+    {
+     "id": "house-unnamed-i6",
+     "kind": "sofa2",
+     "x": 520,
+     "y": 640,
+     "w": 165,
+     "h": 90,
+     "rot": 0,
+     "color": "#C7A44E",
+     "label": "Sofa 2-seat"
+    },
+    {
+     "id": "house-unnamed-i7",
+     "kind": "bath",
+     "x": 740,
+     "y": 560,
+     "w": 172,
+     "h": 76,
+     "rot": 0,
+     "color": "#6FA8B5",
+     "label": "Bathtub"
+    },
+    {
+     "id": "house-unnamed-i8",
+     "kind": "basin",
+     "x": 460,
+     "y": 470,
+     "w": 62,
+     "h": 50,
+     "rot": 0,
+     "color": "#6FA8B5",
+     "label": "Basin"
+    }
+   ],
+   "notes": [],
+   "dims": [],
+   "lines": [],
+   "ref": null
+  }
+ ]
+}

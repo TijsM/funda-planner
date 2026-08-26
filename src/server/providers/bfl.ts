@@ -1,33 +1,47 @@
 import 'server-only';
 
-/** Black Forest Labs, FLUX.2 [max] — the whole wire contract, in one place.
+import { metaOf, missingEnvMessage, quotedUsdOf, type ProviderMeta } from '@data/providers';
+import {
+  ProviderError, assertAffordable, controlLegend, detailLine, detailMsg, estimateUsd,
+  hopSafeFetch as hopSafe, jsonBody, num, obj, str, transportFailure, underHost,
+  type GenerateArgs, type PollResult, type Provider, type SubmitResult,
+} from './types';
+
+/** Black Forest Labs, FLUX.2 — the whole wire contract, in one place.
  *
  *  Transcribed from BFL's live OpenAPI document, https://api.bfl.ai/openapi.json
  *  (and the matching pages under https://docs.bfl.ai/api-reference), read
- *  2026-08-14. Documented, not observed: the key in `.env` is rejected with
- *  422 `{"detail":"Invalid API key format"}` before body validation, so nothing
- *  below has been proven against a live call yet.
+ *  2026-08-14 and re-read 2026-08-18. Documented, not observed: the key in
+ *  `.env` is rejected with 422 `{"detail":"Invalid API key format"}` before body
+ *  validation, so nothing below has been proven against a live call yet.
  *
  *  SUBMIT
- *    POST https://api.bfl.ai/v1/flux-2-max
+ *    POST https://api.bfl.ai/v1/flux-2-max   (or /v1/flux-2-flex)
  *    headers  x-key: <raw key>          — there is no `Authorization: Bearer`
  *                                         form; Bearer answers 403 "Not authenticated"
  *             content-type: application/json
  *             accept: application/json
  *    body     prompt            string   required
  *             input_image       string   RAW base64 — no "data:image/png;base64," prefix
+ *             input_image_2 … _8         more references, same encoding, all optional
  *             width, height     number   multiple of 16, >= 64, width*height <= 4 MP.
  *                                        FLUX.2 has no aspect_ratio field: the ratio
  *                                        is these two numbers. Billing is per output
  *                                        megapixel, so 1800×1800 costs roughly 3× 1 MP,
  *                                        and [max]'s rate is about double [pro]'s.
  *             seed              number | null — null or omitted is random
- *             disable_pup       true     stops BFL's own LLM rewriting the prompt and
- *                                        inventing rooms. pro/max only.
  *             output_format     'png'    the flux-2-* default is jpeg
  *             safety_tolerance  2        0..5 on FLUX.2 (0..6 on kontext); above the
  *                                        model's own maximum is a 422
  *             (never send webhook_url — it removes polling_url from the response)
+ *    [max]/[pro] only:
+ *             disable_pup       true     stops BFL's own LLM rewriting the prompt and
+ *                                        inventing rooms. Upstream default false.
+ *    [flex] only, INSTEAD of disable_pup — it does not have that field at all:
+ *             prompt_upsampling false    the same switch written the other way up, and
+ *                                        upstream it defaults TRUE. See FLEX below.
+ *             guidance          number   1.5..10, upstream default 5
+ *             steps             integer  1..50, upstream default 50
  *    → 200 { id, polling_url, cost?, input_mp?, output_mp? }
  *
  *  POLL
@@ -42,11 +56,10 @@ import 'server-only';
  *    have to be pulled down server-side.
  */
 
-/* One constant, so swapping models is a one-line change — but not the only
-   copy of the string: MODEL_LABEL in `src/state/renders.ts` names the model on
-   the record the browser writes, and this file is server-only, so that one has
-   to move in the same commit or a render gets filed under a model that never
-   drew it.
+/* One constant, so swapping models is a one-line change. The string a record is
+   filed under is no longer a second copy of it: `modelLabelOf` in
+   `src/data/providers.ts` reads the label off this provider's own metadata, which
+   both sides of the server boundary import.
 
    [max] and [pro] share one request schema upstream (`Flux2Inputs` in
    api.bfl.ai/openapi.json — same input_image, width/height, seed, disable_pup,
@@ -58,55 +71,19 @@ export const MODEL = 'flux-2-max';
 
 const BASE = 'https://api.bfl.ai';
 
-/* Provider facts the request routes validate against, exported so the ceiling is
-   stated once. Multiples of 16 and >= 64 per side; 4 MP is the product ceiling. */
-export const DIM_STEP = 16;
-export const MIN_DIM = 64;
-export const MAX_OUTPUT_PIXELS = 4_000_000;
-
-/** Both routes are stateless — neither can see how long a job has been running —
- *  so the 180 s cap is enforced by the client poller. The wording lives here so
- *  the poller and the adapter cannot drift apart. */
-export const POLL_TIMEOUT_MS = 180_000;
-export const POLL_TIMEOUT_MESSAGE = 'The render timed out after 3 minutes.';
+/* This model's own limits — multiples of 16 and >= 64 per side, 4 MP a side — are
+   not constants here any more. They live in `src/data/providers.ts`, which the
+   browser reads too, and each provider carries its own: the routes measure a
+   request against whichever provider was chosen, and a constant named after this
+   one is how a z-image render came to be validated against FLUX.2's ceiling. */
 
 /** Said in one place because both routes check for the key and both must say the
- *  same thing when it is absent. */
-export const MISSING_KEY = 'FLUX_API_KEY is not set on the server, so no render can be submitted.';
+ *  same thing when it is absent — and the words come from `@data/providers`, so
+ *  what a person sees does not depend on which side noticed. */
+const MISSING_KEY = missingEnvMessage(metaOf('flux2-max'));
 
-export interface SubmitArgs {
-  prompt: string;
-  /** raw base64 png, already stripped of any data: prefix */
-  imageBase64: string;
-  width: number;
-  height: number;
-  seed: number | null;
-}
-
-export interface SubmitResult {
-  id: string;
-  pollUrl: string;
-  /** in credits, 1 credit = $0.01. Absent on some clusters. */
-  cost: number | null;
-}
-
-export type PollResult =
-  | { status: 'pending'; progress: number | null }
-  | { status: 'ready'; imageUrl: string; cost: number | null }
-  | { status: 'failed'; error: string; retryable: boolean };
-
-/** A provider failure already phrased for the person waiting on the render, with
- *  the HTTP status the route should answer and whether trying again can help. */
-export class ProviderError extends Error {
-  readonly status: number;
-  readonly retryable: boolean;
-  constructor(status: number, message: string, retryable: boolean) {
-    super(message);
-    this.name = 'ProviderError';
-    this.status = status;
-    this.retryable = retryable;
-  }
-}
+export { ProviderError };
+export type { PollResult, SubmitResult };
 
 /* ── plumbing ────────────────────────────────────────────────────── */
 
@@ -118,52 +95,10 @@ function apiKey(): string {
   return key;
 }
 
-function obj(v: unknown): Record<string, unknown> | null {
-  return typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
-}
-function str(v: unknown): string | null {
-  return typeof v === 'string' && v.trim() ? v : null;
-}
-function num(v: unknown): number | null {
-  return typeof v === 'number' && Number.isFinite(v) ? v : null;
-}
-
-async function body(res: Response): Promise<unknown> {
-  try { return await res.json(); } catch { return null; }
-}
-
-/** FastAPI answers 422 two different ways: `detail` is a list of
- *  `{loc, msg, type}` for field validation, and a bare string for everything it
- *  rejects earlier — the invalid-key rejection arrives as the string form. Both
- *  are the developer's own bug, so both go through verbatim. */
-function detailMsg(payload: unknown): string | null {
-  const d = obj(payload)?.detail;
-  if (typeof d === 'string') return d.trim() || null;
-  if (Array.isArray(d)) {
-    const first = obj(d[0]);
-    return first ? str(first.msg) : null;
-  }
-  return null;
-}
-
-/** `details` is free-form JSON and ends up in a toast, where a pretty-printed
- *  object is unreadable. Flatten it to one clause and cap it. */
-function detailLine(v: unknown): string {
-  const d = obj(v);
-  if (!d) return '';
-  const reasons = d['Moderation Reasons'];
-  const text = Array.isArray(reasons)
-    ? reasons.map(String).join('; ')
-    : Object.entries(d).map(([k, val]) => `${k}: ${typeof val === 'string' ? val : JSON.stringify(val)}`).join('; ');
-  const flat = text.replace(/\s+/g, ' ').trim();
-  if (!flat) return '';
-  return ` The provider said: ${flat.length > 300 ? `${flat.slice(0, 299)}…` : flat}`;
-}
-
 /** Upstream HTTP status → what the person waiting is told, and whether a retry
  *  is even worth offering. Every branch names the real cause. */
 async function httpFailure(res: Response): Promise<ProviderError> {
-  const payload = await body(res);
+  const payload = await jsonBody(res);
   switch (res.status) {
     case 401:
     case 403:
@@ -204,19 +139,6 @@ async function httpFailure(res: Response): Promise<ProviderError> {
   }
 }
 
-/** A refused connection, DNS failure or our own AbortSignal — never a status
- *  code, so it cannot go through httpFailure. */
-function transportFailure(e: unknown, what: string): ProviderError {
-  const timedOut = e instanceof Error && (e.name === 'TimeoutError' || e.name === 'AbortError');
-  return new ProviderError(
-    504,
-    timedOut
-      ? `The image provider did not answer the ${what} within the timeout.`
-      : `Could not reach the image provider to ${what} (${e instanceof Error ? e.message : 'unknown network error'}).`,
-    true,
-  );
-}
-
 /** The only hosts the API key may ever be shown. The polling URL arrives from
  *  the browser, so this is the line between "poll a job" and "hand our key to
  *  whatever host the caller named". */
@@ -224,71 +146,84 @@ export function bflUrl(raw: string): URL | null {
   let u: URL;
   try { u = new URL(raw); } catch { return null; }
   if (u.protocol !== 'https:') return null;
-  if (u.hostname !== 'api.bfl.ai' && !u.hostname.endsWith('.bfl.ai')) return null;
+  if (!underHost(u.hostname, 'bfl.ai')) return null;
   return u;
 }
 
-/** fetch() follows redirects itself, and undici strips only `authorization`,
- *  `cookie`, `proxy-authorization` and `host` when a redirect crosses an origin
- *  — a custom header rides along. So `x-key` on a checked bfl.ai URL that
- *  answers 302 lands on whatever host the Location names, in cleartext if it
- *  downgrades to http. Checking the URL once was never enough: every hop gets
- *  the same check, by hand. */
+const OFF_HOST = 'The image provider redirected off bfl.ai. Refusing to follow it with the API key attached.';
+
+/** Kept at its old three-argument shape because `app/api/render/status/route.ts`
+ *  calls it to pull the finished PNG down; the hop-by-hop reasoning it exists for
+ *  now lives in `types.ts`, where fal needs it too. */
 export async function hopSafeFetch(url: URL, init: RequestInit, hops = 3): Promise<Response> {
-  let target = url;
-  for (let i = 0; i <= hops; i++) {
-    const res = await fetch(target, { ...init, redirect: 'manual' });
-    if (res.status < 300 || res.status > 399) return res;
-    const loc = res.headers.get('location');
-    if (!loc) return res;
-    /* relative Locations are common and harmless — resolve before checking, so
-       a same-host redirect still works */
-    const next = bflUrl(new URL(loc, target).toString());
-    if (!next) {
-      throw new ProviderError(
-        502,
-        'The image provider redirected off bfl.ai. Refusing to follow it with the API key attached.',
-        false,
-      );
-    }
-    target = next;
-  }
-  throw new ProviderError(502, 'The image provider redirected too many times.', false);
+  return hopSafe(url, init, bflUrl, OFF_HOST, hops);
 }
 
 /* ── the two calls ───────────────────────────────────────────────── */
 
-/** Hand a plan and a prompt to BFL. Returns the job id and the polling URL to
- *  keep verbatim; throws ProviderError for anything the caller should surface. */
-export async function submit(args: SubmitArgs): Promise<SubmitResult> {
+/** Extra conditioning maps go in the spare reference slots. FLUX.2 has no
+ *  control input — docs.bfl.ai is explicit that structure is interpreted
+ *  *semantically* — so a depth map here is read as a picture of a depth map and
+ *  there is no evidence it constrains geometry at all. It is sent because the
+ *  slots are free (billing is on output resolution only) and the harness is what
+ *  will tell us whether it did anything. Nothing more is claimed for it. */
+function references(args: GenerateArgs): Record<string, string> {
+  const out: Record<string, string> = { input_image: args.imageBase64 };
+  (args.controls ?? []).slice(0, 7).forEach((c, i) => { out[`input_image_${i + 2}`] = c.base64; });
+  return out;
+}
+
+/** The prompt with a sentence naming what each extra reference is — unless the
+ *  brief already names them, which the app's own briefs do. Appended rather than
+ *  prepended: BFL's prompting guide says word order matters and the brief has to
+ *  come first. */
+function promptFor(args: GenerateArgs): string {
+  const legend = controlLegend(args.controls ?? [], args.prompt);
+  return legend ? `${args.prompt} ${legend}` : args.prompt;
+}
+
+async function bflSubmit(meta: ProviderMeta, model: string, extra: Record<string, unknown>, args: GenerateArgs): Promise<SubmitResult> {
+  assertAffordable(meta, args.width, args.height);
   const key = apiKey();
   let res: Response;
   try {
-    res = await fetch(`${BASE}/v1/${MODEL}`, {
+    /* Hop-checked like the poll, and for the same reason: undici follows a
+       redirect itself and strips only `authorization`, `cookie`,
+       `proxy-authorization` and `host` across origins, so a 302 out of
+       api.bfl.ai would carry `x-key` — a custom header — to whatever host the
+       Location names, and the plan and prompt with it. The submit was the one
+       call still using bare fetch, which is to say the one call that trusted the
+       vendor's Location header with the key. */
+    res = await hopSafeFetch(new URL(`${BASE}/v1/${model}`), {
       method: 'POST',
       headers: { 'x-key': key, 'content-type': 'application/json', accept: 'application/json' },
       body: JSON.stringify({
-        prompt: args.prompt,
-        input_image: args.imageBase64,
+        prompt: promptFor(args),
+        ...references(args),
         width: args.width,
         height: args.height,
         seed: args.seed,
-        /* the whole point of the product is "reproduce *this* layout" — leaving
-           BFL's prompt upsampler on lets it rewrite the brief and invent rooms */
-        disable_pup: true,
+        /* No disable_pup here: the field that turns BFL's prompt rewriter off is
+           spelled differently on [max] and on [flex], so each model's `extra`
+           carries its own. Putting either one in the shared body sends a field
+           the other endpoint has never heard of — and Pydantic ignores unknown
+           keys rather than rejecting them, so that mistake reads as success and
+           the rewriter stays on. */
         output_format: 'png',
         safety_tolerance: 2,
+        ...extra,
       }),
       cache: 'no-store',
       signal: AbortSignal.timeout(30_000),
     });
   } catch (e) {
+    if (e instanceof ProviderError) throw e;
     throw transportFailure(e, 'submit');
   }
 
   if (!res.ok) throw await httpFailure(res);
 
-  const payload = obj(await body(res));
+  const payload = obj(await jsonBody(res));
   const id = payload ? str(payload.id) : null;
   const pollUrl = payload ? str(payload.polling_url) : null;
   /* No polling_url means the job is running and unreachable — a credit spent on
@@ -296,7 +231,18 @@ export async function submit(args: SubmitArgs): Promise<SubmitResult> {
   if (!id || !pollUrl) {
     throw new ProviderError(502, 'The image provider accepted the job but returned no polling URL, so the result cannot be collected.', false);
   }
-  return { id, pollUrl, cost: payload ? num(payload.cost) : null };
+  const cost = payload ? num(payload.cost) : null;
+  return {
+    id,
+    pollUrl,
+    cost,
+    usd: estimateUsd(meta, args.width, args.height),
+    quotedUsd: quotedUsdOf(meta, cost),
+    metered: {
+      inputMp: payload ? num(payload.input_mp) : null,
+      outputMp: payload ? num(payload.output_mp) : null,
+    },
+  };
 }
 
 /** Poll a job. `pollUrl` must already have been checked to be an https bfl.ai
@@ -329,7 +275,7 @@ export async function poll(pollUrl: string): Promise<PollResult> {
   }
   if (!res.ok) throw await httpFailure(res);
 
-  const payload = obj(await body(res));
+  const payload = obj(await jsonBody(res));
   const status = payload ? str(payload.status) : null;
 
   switch (status) {
@@ -405,3 +351,58 @@ export async function poll(pollUrl: string): Promise<PollResult> {
       };
   }
 }
+
+/* ── the two providers ───────────────────────────────────────────── */
+
+/* Turning BFL's prompt rewriter off is one intention with two spellings, and the
+   two models do not share a field. Read off api.bfl.ai/openapi.json on 2026-08-18
+   and re-read from the raw document rather than the reference pages:
+
+     /v1/flux-2-max   Flux2Inputs      disable_pup, default FALSE.
+                                       No prompt_upsampling anywhere in the schema.
+     /v1/flux-2-flex  Flux2FlexInputs  prompt_upsampling, default TRUE.
+                                       No disable_pup anywhere in the schema.
+
+   Neither schema sets additionalProperties, so FastAPI ignores a field the model
+   does not declare instead of answering 422. That is what makes this worth eight
+   lines of comment: sending disable_pup to [flex] does not fail, it just does
+   nothing, and every flex render comes back with its brief rewritten and rooms
+   invented while the body says in writing that the rewriter is off. A silent
+   wrong answer, which is the failure mode this whole rebuild is chasing.
+
+   Both defaults also point the same way — upstream, out of the box, the rewriter
+   is ON for [flex] and OFF for [max] — so the field cannot be omitted either.
+
+   Guidance defaults lower than BFL's 5, not higher: arXiv:2404.07724 finds
+   classifier-free guidance is actively harmful over the early steps and
+   unnecessary over the late ones, and what this product wants is fidelity to a
+   reference rather than an emphatic reading of a sentence. 3.5 is a starting
+   point for the harness to move, not a tuned number. */
+const MAX_EXTRA = { disable_pup: true } as const;
+
+const FLEX_EXTRA = {
+  prompt_upsampling: false,
+  guidance: 3.5,
+  steps: 50,
+} as const;
+
+function bflProvider(meta: ProviderMeta, model: string, extra: Record<string, unknown>): Provider {
+  return {
+    ...meta,
+    submit: (args) => bflSubmit(meta, model, extra, args),
+    poll,
+    deliveryUrl: bflUrl,
+    /* One guard for both on BFL: the delivery host is delivery.*.bfl.ai and the
+       cluster that answers a poll is api.*.bfl.ai, and `bflUrl` accepts any
+       bfl.ai subdomain rather than enumerating clusters we do not control. */
+    keyedUrl: bflUrl,
+    /* No x-key: the delivery URL is already signed and the key has no business
+       leaving api.bfl.ai. The hop check stays, because a redirect off bfl.ai
+       would still make the status route a willing proxy for reading anything the
+       server can reach — link-local metadata included. */
+    fetchDelivery: (src, init) => hopSafeFetch(src, init ?? {}),
+  };
+}
+
+export const flux2Max: Provider = bflProvider(metaOf('flux2-max'), MODEL, MAX_EXTRA);
+export const flux2Flex: Provider = bflProvider(metaOf('flux2-flex'), 'flux-2-flex', FLEX_EXTRA);

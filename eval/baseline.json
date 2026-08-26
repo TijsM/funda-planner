@@ -1,0 +1,7 @@
+{
+  "comment": "UNPOPULATED, on purpose. No sweep has been run against a live provider yet, so there are no numbers here — and invented ones would be worse than none, because every later `pnpm eval:diff` is measured against this file and would then be measured against fiction. `cells` is empty and eval:diff detects that and says so instead of printing a table. Populate it by scoring a run you trust and promoting it: `pnpm eval:score eval/runs/<stamp>` then `pnpm eval:diff eval/runs/<stamp> --promote`. Promote only a run whose manifest says providerVerified \"yes\" or \"vendor\" — a baseline that cannot say which model drew its images cannot be cited. See docs/EVAL.md.",
+  "kind": "render",
+  "run": null,
+  "scoredAt": null,
+  "cells": []
+}

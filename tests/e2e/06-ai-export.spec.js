@@ -19,8 +19,15 @@ test.describe('export for an image generator', () => {
     const p = await page.locator('#aiPrompt').inputValue();
     console.log('\n──────── generated prompt ────────\n' + p + '\n──────────────────────────────────\n');
 
-    // the address and floor it actually came from
-    expect(p).toContain('Pieter Kleijnstraat 19');
+    /* The floor it came from — but not the street address: it steers nothing in
+       an image and pulls the model towards whatever real building it half
+       remembers, so v2 leaves it out. The shipped build still carries it. */
+    if (process.env.E2E_TARGET === 'next') {
+      expect(p).not.toContain('Pieter Kleijnstraat');
+      expect(p).toMatch(/strict orthographic/i);
+    } else {
+      expect(p).toContain('Pieter Kleijnstraat 19');
+    }
     expect(p).toContain('Begane Grond');
     // real rooms, with their real areas
     expect(p).toContain('Woonkamer');
@@ -29,7 +36,7 @@ test.describe('export for an image generator', () => {
     // orientation and openings derived from the plan
     expect(p).toMatch(/North is at the top/);
     expect(p).toMatch(/Windows on the .*(north|south|east|west)/);
-    expect(p).toMatch(/\d+ doorways? connect the rooms/);
+    expect(p).toMatch(/\d+ doorways? connects? the rooms/);
     // guardrails against the model inventing architecture
     expect(p).toMatch(/reproduce exactly|do not invent/i);
     expect(p).toMatch(/Do not add, remove or rearrange walls/);
@@ -170,7 +177,10 @@ test.describe('export for an image generator', () => {
        invented dimensions, while the prompt promised the image had no text at
        all. The toggle stays; the default changed. */
     await expect(page.locator('#aiImgDims')).not.toBeChecked();
-    await expect(page.locator('.ai-right')).not.toContainText('bleed into the render');
+    /* Names the toggle, not the phrasing: two of these switches now carry a
+       lettering warning, and asserting on the shared half of the sentence made
+       this test pass or fail on the other one's copy. */
+    await expect(page.locator('.ai-right')).not.toContainText('Measurements on the image off');
 
     /* Was a count of dark pixels, on the reasoning that chains and captions are
        ink and ink only goes up. That stopped holding once the frame excluded the

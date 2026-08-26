@@ -1,0 +1,456 @@
+{
+ "schema": 2,
+ "id": "house-jaren30",
+ "name": "Jaren-30 house",
+ "createdAt": 1787011200000,
+ "updatedAt": 1787011200000,
+ "source": null,
+ "floors": [
+  {
+   "id": "house-jaren30-f0",
+   "name": "Begane grond",
+   "level": 0,
+   "walls": [
+    {
+     "id": "house-jaren30-w0",
+     "a": {
+      "x": 0,
+      "y": 0
+     },
+     "b": {
+      "x": 880,
+      "y": 0
+     },
+     "t": 24,
+     "openings": [
+      {
+       "id": "house-jaren30-o0",
+       "at": 0.15,
+       "type": "door",
+       "width": 95,
+       "flip": 0,
+       "side": 0
+      },
+      {
+       "id": "house-jaren30-o1",
+       "at": 0.6,
+       "type": "window",
+       "width": 240,
+       "flip": 0,
+       "side": 0
+      }
+     ]
+    },
+    {
+     "id": "house-jaren30-w1",
+     "a": {
+      "x": 880,
+      "y": 0
+     },
+     "b": {
+      "x": 880,
+      "y": 980
+     },
+     "t": 24,
+     "openings": [
+      {
+       "id": "house-jaren30-o2",
+       "at": 0.3,
+       "type": "window",
+       "width": 160,
+       "flip": 0,
+       "side": 0
+      }
+     ]
+    },
+    {
+     "id": "house-jaren30-w2",
+     "a": {
+      "x": 880,
+      "y": 980
+     },
+     "b": {
+      "x": 0,
+      "y": 980
+     },
+     "t": 24,
+     "openings": [
+      {
+       "id": "house-jaren30-o3",
+       "at": 0.5,
+       "type": "window",
+       "width": 300,
+       "flip": 0,
+       "side": 0
+      }
+     ]
+    },
+    {
+     "id": "house-jaren30-w3",
+     "a": {
+      "x": 0,
+      "y": 980
+     },
+     "b": {
+      "x": 0,
+      "y": 0
+     },
+     "t": 24,
+     "openings": []
+    },
+    {
+     "id": "house-jaren30-w4",
+     "a": {
+      "x": 260,
+      "y": 0
+     },
+     "b": {
+      "x": 260,
+      "y": 980
+     },
+     "t": 12,
+     "openings": [
+      {
+       "id": "house-jaren30-o4",
+       "at": 0.28,
+       "type": "door",
+       "width": 90,
+       "flip": 0,
+       "side": 0
+      },
+      {
+       "id": "house-jaren30-o5",
+       "at": 0.72,
+       "type": "door",
+       "width": 90,
+       "flip": 0,
+       "side": 0
+      }
+     ]
+    },
+    {
+     "id": "house-jaren30-w5",
+     "a": {
+      "x": 260,
+      "y": 620
+     },
+     "b": {
+      "x": 880,
+      "y": 620
+     },
+     "t": 12,
+     "openings": []
+    },
+    {
+     "id": "house-jaren30-w6",
+     "a": {
+      "x": 0,
+      "y": 620
+     },
+     "b": {
+      "x": 260,
+      "y": 620
+     },
+     "t": 12,
+     "openings": []
+    },
+    {
+     "id": "house-jaren30-w7",
+     "a": {
+      "x": 0,
+      "y": 780
+     },
+     "b": {
+      "x": 260,
+      "y": 780
+     },
+     "t": 12,
+     "openings": []
+    }
+   ],
+   "areas": [
+    {
+     "id": "house-jaren30-a0",
+     "poly": [
+      {
+       "x": 260,
+       "y": 0
+      },
+      {
+       "x": 880,
+       "y": 0
+      },
+      {
+       "x": 880,
+       "y": 620
+      },
+      {
+       "x": 260,
+       "y": 620
+      }
+     ],
+     "name": "Woonkamer",
+     "color": "#E4DCC5",
+     "nx": 0,
+     "ny": 0,
+     "label": true,
+     "desc": "en-suite doors and the original fireplace stay"
+    },
+    {
+     "id": "house-jaren30-a1",
+     "poly": [
+      {
+       "x": 260,
+       "y": 620
+      },
+      {
+       "x": 880,
+       "y": 620
+      },
+      {
+       "x": 880,
+       "y": 980
+      },
+      {
+       "x": 260,
+       "y": 980
+      }
+     ],
+     "name": "Keuken",
+     "color": "#C6B9AA",
+     "nx": 0,
+     "ny": 0,
+     "label": true
+    },
+    {
+     "id": "house-jaren30-a2",
+     "poly": [
+      {
+       "x": 0,
+       "y": 0
+      },
+      {
+       "x": 260,
+       "y": 0
+      },
+      {
+       "x": 260,
+       "y": 620
+      },
+      {
+       "x": 0,
+       "y": 620
+      }
+     ],
+     "name": "Hal",
+     "color": "#D6C7B4",
+     "nx": 0,
+     "ny": 0,
+     "label": true
+    },
+    {
+     "id": "house-jaren30-a3",
+     "poly": [
+      {
+       "x": 0,
+       "y": 780
+      },
+      {
+       "x": 260,
+       "y": 780
+      },
+      {
+       "x": 260,
+       "y": 980
+      },
+      {
+       "x": 0,
+       "y": 980
+      }
+     ],
+     "name": "Berging",
+     "color": "#C9D3C0",
+     "nx": 0,
+     "ny": 0,
+     "label": true
+    },
+    {
+     "id": "house-jaren30-a4",
+     "poly": [
+      {
+       "x": 0,
+       "y": 620
+      },
+      {
+       "x": 260,
+       "y": 620
+      },
+      {
+       "x": 260,
+       "y": 780
+      },
+      {
+       "x": 0,
+       "y": 780
+      }
+     ],
+     "name": "Toilet",
+     "color": "#BFCBD4",
+     "nx": 0,
+     "ny": 0,
+     "label": true
+    }
+   ],
+   "items": [
+    {
+     "id": "house-jaren30-i0",
+     "kind": "stairU",
+     "x": 130,
+     "y": 300,
+     "w": 105,
+     "h": 260,
+     "rot": 0,
+     "color": "#8C857A",
+     "label": "Stairs",
+     "desc": "straight run up to the first floor"
+    },
+    {
+     "id": "house-jaren30-i1",
+     "kind": "sofa3",
+     "x": 560,
+     "y": 110,
+     "w": 225,
+     "h": 95,
+     "rot": 0,
+     "color": "#C7A44E",
+     "label": "Sofa 3-seat"
+    },
+    {
+     "id": "house-jaren30-i2",
+     "kind": "coffee",
+     "x": 560,
+     "y": 240,
+     "w": 110,
+     "h": 60,
+     "rot": 0,
+     "color": "#C7A44E",
+     "label": "Coffee table"
+    },
+    {
+     "id": "house-jaren30-i3",
+     "kind": "tv",
+     "x": 855,
+     "y": 300,
+     "w": 120,
+     "h": 10,
+     "rot": 90,
+     "color": "#C7A44E",
+     "label": "TV"
+    },
+    {
+     "id": "house-jaren30-i4",
+     "kind": "fireplc",
+     "x": 340,
+     "y": 18,
+     "w": 120,
+     "h": 35,
+     "rot": 0,
+     "color": "#C7A44E",
+     "label": "Fireplace"
+    },
+    {
+     "id": "house-jaren30-i5",
+     "kind": "dt6",
+     "x": 600,
+     "y": 470,
+     "w": 180,
+     "h": 90,
+     "rot": 0,
+     "color": "#C7A44E",
+     "label": "Table 6p"
+    },
+    {
+     "id": "house-jaren30-i6",
+     "kind": "kisland",
+     "x": 570,
+     "y": 790,
+     "w": 200,
+     "h": 100,
+     "rot": 0,
+     "color": "#8FA9C4",
+     "label": "Island"
+    },
+    {
+     "id": "house-jaren30-i7",
+     "kind": "kcount",
+     "x": 400,
+     "y": 935,
+     "w": 120,
+     "h": 62,
+     "rot": 0,
+     "color": "#8FA9C4",
+     "label": "Counter run"
+    },
+    {
+     "id": "house-jaren30-i8",
+     "kind": "sink2",
+     "x": 600,
+     "y": 936,
+     "w": 120,
+     "h": 60,
+     "rot": 0,
+     "color": "#8FA9C4",
+     "label": "Double sink"
+    },
+    {
+     "id": "house-jaren30-i9",
+     "kind": "hob",
+     "x": 760,
+     "y": 936,
+     "w": 62,
+     "h": 60,
+     "rot": 0,
+     "color": "#8FA9C4",
+     "label": "Hob"
+    },
+    {
+     "id": "house-jaren30-i10",
+     "kind": "fridge2",
+     "x": 820,
+     "y": 700,
+     "w": 95,
+     "h": 75,
+     "rot": 0,
+     "color": "#8FA9C4",
+     "label": "Am. fridge"
+    },
+    {
+     "id": "house-jaren30-i11",
+     "kind": "toilet",
+     "x": 130,
+     "y": 700,
+     "w": 40,
+     "h": 68,
+     "rot": 0,
+     "color": "#6FA8B5",
+     "label": "Toilet"
+    },
+    {
+     "id": "house-jaren30-i12",
+     "kind": "washer",
+     "x": 130,
+     "y": 900,
+     "w": 62,
+     "h": 62,
+     "rot": 0,
+     "color": "#6FA8B5",
+     "label": "Washer"
+    }
+   ],
+   "notes": [],
+   "dims": [],
+   "lines": [],
+   "ref": null
+  }
+ ]
+}

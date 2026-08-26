@@ -1,21 +1,34 @@
 import type { NextRequest } from 'next/server';
 import { isCloud } from '@data/config';
+import { missingEnvMessage } from '@data/providers';
 import { RENDER_BUCKET, renderImagePath, type RenderRow } from '@data/schema';
-import { MISSING_KEY, ProviderError, bflUrl, hopSafeFetch, poll } from '@server/providers/bfl';
+import {
+  DEFAULT_PROVIDER, PROVIDERS, ProviderError, providerOf, type Provider,
+} from '@server/providers';
 import { currentUserId, serverClient, type ServerDb } from '@server/supabase';
 
 /** Polls one job and, the moment it is ready, collects the bytes.
  *
- *  Downloading them here is not an optimisation: the finished image sits on
- *  `delivery.*.bfl.ai`, which serves no CORS headers, so the browser cannot
- *  fetch it at all — and the signed URL dies after ten minutes regardless.
+ *  Downloading them here is not an optimisation: the finished image sits on a
+ *  delivery host that serves no CORS headers — `delivery.*.bfl.ai` for BFL,
+ *  `*.fal.media` for fal — so the browser cannot fetch it at all, and the signed
+ *  URL dies within minutes regardless.
  *
  *  Where they go afterwards is the one difference between the two modes. Local
  *  mode hands them back base64 in the same response, to IndexedDB. Cloud mode
  *  puts them in the private Storage bucket under the owner's uuid and answers
  *  with a signed URL, and it takes the polling URL from the render's row rather
  *  than from the query string — which is what stops one account polling
- *  another's job. */
+ *  another's job.
+ *
+ *  WHICH provider is polled is now a question with a different answer per mode,
+ *  and it decides which hosts the API key may be shown. Cloud mode reads it off
+ *  the row, where the submit route wrote it; local mode is told by the client,
+ *  which is the same trust as the polling URL it also sends. Either way the URL
+ *  is checked against THAT provider's allowlist and never a shared one: a job
+ *  queued at fal must not be pollable through a URL only bfl.ts would have
+ *  accepted, or the check stops being a check and becomes a union of every
+ *  vendor we have ever integrated. */
 
 /* A 4 MP PNG is a few MB; anything an order of magnitude past that is not our
    render and should not be turned into a base64 string in memory. */
@@ -26,8 +39,8 @@ const MAX_DELIVERY_BYTES = 32 * 1024 * 1024;
 const SIGNED_URL_TTL_S = 3600;
 
 /* The polling URL arrives from the client, and this route attaches our API key
-   to whatever it names — so `bflUrl` is the line between polling a job and
-   handing FLUX_API_KEY to any host an attacker picks. It lives in the provider
+   to whatever it names — so the provider's own guard is the line between polling
+   a job and handing a key to any host an attacker picks. It lives in the provider
    next to the fetch that trusts it, because two copies of a check like this one
    is two copies to keep in step. */
 
@@ -38,6 +51,22 @@ function failed(error: string, status: number, retryable = false) {
 /* Same token the proxy answers with — `src/shell/jobs.ts` switches on the 401
    before it reads the body, so this is never shown to anyone. */
 const unauthenticated = () => Response.json({ error: 'unauthenticated' }, { status: 401 });
+
+/* ── which provider ──────────────────────────────────────────────── */
+
+/** Same rule as the submit route: an id the client names and this server does
+ *  not have is a 400, because polling a fal job through BFL's client would fail
+ *  later with a sentence about hosts that names nothing anyone can fix. Saying
+ *  nothing at all still means the default, which is every client written before
+ *  there was more than one provider. */
+function pick(id: string | null): Provider | Response {
+  if (!id) return PROVIDERS[DEFAULT_PROVIDER];
+  const provider = PROVIDERS[id];
+  if (!provider) {
+    return failed(`There is no image provider called "${id}". The ones this server can use are ${Object.keys(PROVIDERS).join(', ')}.`, 400);
+  }
+  return provider;
+}
 
 /* ── collecting the finished image ───────────────────────────────── */
 
@@ -51,19 +80,21 @@ const undelivered = (error: string, status: number, retryable = false): Delivere
 /** Pulls the finished PNG off the delivery host. Every failure is phrased for
  *  the person waiting and says whether polling again can help — the caller
  *  decides what that means for the record it is holding. */
-async function deliver(imageUrl: string): Promise<Delivered> {
-  /* The delivery host is a different name under the same domain, so it goes
-     through the same check — and it gets no x-key: the URL is already signed and
-     the key has no business leaving api.bfl.ai. */
-  const src = bflUrl(imageUrl);
-  if (!src) return undelivered('The provider returned the finished image on a host outside bfl.ai. Refusing to fetch it.', 502);
+async function deliver(provider: Provider, imageUrl: string): Promise<Delivered> {
+  /* The delivery host is a different name under the same vendor, so it goes
+     through the vendor's own check — and the fetch gets no API key: the URL is
+     already signed and the key has no business leaving the API host. */
+  const src = provider.deliveryUrl(imageUrl);
+  if (!src) return undelivered(`${provider.label} returned the finished image on a host outside its own. Refusing to fetch it.`, 502);
 
   let res: Response;
   try {
     /* Same hop-by-hop check as the poll. This fetch carries no key, but a
-       redirect off bfl.ai would still make this route a willing proxy for
-       reading anything the server can reach — link-local metadata included. */
-    res = await hopSafeFetch(src, { cache: 'no-store', signal: AbortSignal.timeout(60_000) });
+       redirect off the vendor's hosts would still make this route a willing
+       proxy for reading anything the server can reach — link-local metadata
+       included. That discipline is `fetchDelivery`, per provider, rather than one
+       function here that would have to know every vendor's domains. */
+    res = await provider.fetchDelivery(src, { cache: 'no-store', signal: AbortSignal.timeout(60_000) });
   } catch (e) {
     if (e instanceof ProviderError) return undelivered(e.message, e.status, e.retryable);
     const timedOut = e instanceof Error && (e.name === 'TimeoutError' || e.name === 'AbortError');
@@ -75,13 +106,14 @@ async function deliver(imageUrl: string): Promise<Delivered> {
     );
   }
   if (!res.ok) {
-    /* 403/404 here is almost always the ten-minute signature expiring between
-       the poll saying Ready and this fetch — polling again will not bring it back. */
+    /* 403/404 here is almost always the signature expiring between the poll
+       saying Ready and this fetch — ten minutes at BFL — and polling again will
+       not bring it back. */
     const expired = res.status === 403 || res.status === 404;
     return undelivered(
       expired
-        ? 'The finished render expired before it could be downloaded — the provider keeps it for ten minutes.'
-        : `The provider served the finished render as HTTP ${res.status}.`,
+        ? 'The finished render expired before it could be downloaded — a delivery link only lives a few minutes.'
+        : `${provider.label} served the finished render as HTTP ${res.status}.`,
       502, !expired,
     );
   }
@@ -90,7 +122,7 @@ async function deliver(imageUrl: string): Promise<Delivered> {
   /* An HTML error page would base64 just as happily as a PNG and land in the
      filmstrip as a broken thumbnail with no explanation. */
   if (!contentType.startsWith('image/')) {
-    return undelivered(`The provider served the finished render as ${contentType || 'an unlabelled type'}, not an image.`, 502);
+    return undelivered(`${provider.label} served the finished render as ${contentType || 'an unlabelled type'}, not an image.`, 502);
   }
 
   const tooBig = (bytes: number) =>
@@ -116,15 +148,36 @@ async function local(q: URLSearchParams): Promise<Response> {
   const raw = q.get('pollUrl') ?? '';
   if (!raw) return failed('No pollUrl was given, so there is no job to poll.', 400);
 
-  const target = bflUrl(raw);
-  if (!target) return failed('The pollUrl is not an https URL on bfl.ai. Refusing to send the API key to it.', 400);
+  const named = q.get('provider');
+  const provider = pick(named);
+  if (provider instanceof Response) return provider;
+  if (!process.env[provider.needsEnv]) return failed(missingEnvMessage(provider), 500);
+
+  /* `keyedUrl`, not `deliveryUrl`: this URL arrives from the browser and we are
+     about to attach an API key to it, so it is checked against the hosts that may
+     see the key rather than against every host the vendor owns. fal's CDN is one
+     of the latter, and the wider guard would have accepted a fal.media address
+     here. What matters as much is that it is THIS provider's guard: a fal status
+     URL polled as a BFL job dies here, with the key still on the server. */
+  const target = provider.keyedUrl(raw);
+  if (!target) {
+    /* Two sentences for one refusal, because the likely causes are different
+       people's problems. A named provider whose URL is somebody else's is a
+       request to refuse; no provider named at all is a client that has not been
+       taught to send one yet, and every fal job it submits would die here with a
+       message about BFL's hosts that names nothing anyone could act on. */
+    return failed(named
+      ? `That pollUrl is not an https address on ${provider.label}'s own hosts. Refusing to send the API key to it.`
+      : `The poll did not say which provider this job belongs to, so it was tried as ${provider.label}, and the pollUrl is not on ${provider.label}'s hosts. Send provider= alongside pollUrl.`,
+    400);
+  }
 
   let result;
   try {
-    result = await poll(target.toString());
+    result = await provider.poll(target.toString());
   } catch (e) {
     if (e instanceof ProviderError) {
-      console.warn(`[render] poll refused ${jobId} (${e.status}): ${e.message}`);
+      console.warn(`[render] poll refused ${jobId} ${provider.id} (${e.status}): ${e.message}`);
       return failed(e.message, e.status, e.retryable);
     }
     throw e;
@@ -135,11 +188,11 @@ async function local(q: URLSearchParams): Promise<Response> {
     return Response.json(result);
   }
 
-  const image = await deliver(result.imageUrl);
+  const image = await deliver(provider, result.imageUrl);
   if (!image.ok) return failed(image.error, image.status, image.retryable);
 
   const buf = Buffer.from(image.bytes);
-  console.log(`[render] ready ${jobId} ${buf.byteLength} bytes cost=${result.cost ?? 'not quoted'}`);
+  console.log(`[render] ready ${jobId} ${provider.id} ${buf.byteLength} bytes cost=${result.cost ?? 'not quoted'}`);
   return Response.json({
     status: 'ready',
     image: buf.toString('base64'),
@@ -152,10 +205,10 @@ async function local(q: URLSearchParams): Promise<Response> {
 /* ── cloud mode: bytes to Storage, a signed URL back ─────────────── */
 
 type Row = Pick<RenderRow,
-  'id' | 'status' | 'error' | 'provider_job_id' | 'provider_poll_url' | 'image_path'
+  'id' | 'status' | 'error' | 'model' | 'provider_job_id' | 'provider_poll_url' | 'image_path'
   | 'bytes' | 'created_at'>;
 
-const COLUMNS = 'id, status, error, provider_job_id, provider_poll_url, image_path, bytes, created_at';
+const COLUMNS = 'id, status, error, model, provider_job_id, provider_poll_url, image_path, bytes, created_at';
 
 /** How long the render actually took, measured from the row rather than from
  *  anything the client says — the clock that matters is the one that started
@@ -230,18 +283,36 @@ async function cloud(q: URLSearchParams): Promise<Response> {
     return Response.json({ status: 'failed', error: row.error ?? 'This render failed, and the reason was not recorded.' });
   }
 
-  /* Never from the query string. A pending row with no polling URL cannot ever
-     settle, so it is closed here rather than polled forever. */
+  /* Never from the query string, in either sense: not the URL and not the
+     provider. `providerOf` falls back rather than refusing, which is what keeps
+     rows written before there was a provider id — they say `flux-2-max`, which
+     is not an id — polling through the provider that actually drew them. */
+  const provider = providerOf(row.model);
   if (!row.provider_poll_url) {
     return settleFailed(db, row, 'This render was never handed to the provider, so there is nothing to wait for. Generate it again.', 502);
+  }
+  /* A key that is not configured says nothing about this render, so the row is
+     left pending: setting the variable and reloading collects the same job. */
+  if (!process.env[provider.needsEnv]) return failed(missingEnvMessage(provider), 500, true);
+  /* The stored URL against the stored provider's own allowlist. Disagreement
+     here is not an attack, it is a row that cannot ever be polled — a provider
+     renamed under a job in flight, or a URL written by a build that recorded a
+     different provider — and there is nothing to wait for, so it settles rather
+     than failing every poll for three minutes. */
+  if (!provider.keyedUrl(row.provider_poll_url)) {
+    return settleFailed(
+      db, row,
+      `This render is recorded as a ${provider.label} job, but the polling URL stored with it is not on ${provider.label}'s hosts, so it cannot be collected. Generate it again.`,
+      502,
+    );
   }
 
   let result;
   try {
-    result = await poll(row.provider_poll_url);
+    result = await provider.poll(row.provider_poll_url);
   } catch (e) {
     if (e instanceof ProviderError) {
-      console.warn(`[render] poll refused ${row.provider_job_id ?? '?'} render=${row.id} (${e.status}): ${e.message}`);
+      console.warn(`[render] poll refused ${row.provider_job_id ?? '?'} ${provider.id} render=${row.id} (${e.status}): ${e.message}`);
       /* A capacity or transport refusal says nothing about the job, which is
          still running and still costs the same — only a terminal refusal, a
          rejected key or a job the provider disowns, settles the row. */
@@ -254,7 +325,7 @@ async function cloud(q: URLSearchParams): Promise<Response> {
   if (result.status === 'pending') return Response.json({ status: 'pending', progress: result.progress });
   if (result.status === 'failed') return settleFailed(db, row, result.error, 200, result.retryable);
 
-  const image = await deliver(result.imageUrl);
+  const image = await deliver(provider, result.imageUrl);
   if (!image.ok) {
     if (image.retryable) return failed(image.error, image.status, true);
     return settleFailed(db, row, image.error, image.status);
@@ -311,17 +382,19 @@ async function cloud(q: URLSearchParams): Promise<Response> {
     return failed('This render was deleted while it was finishing, so there is nothing left to show.', 404);
   }
 
-  console.log(`[render] ready ${row.provider_job_id ?? '?'} render=${row.id} ${image.bytes.byteLength} bytes cost=${result.cost ?? 'not quoted'}`);
+  console.log(`[render] ready ${row.provider_job_id ?? '?'} ${provider.id} render=${row.id} ${image.bytes.byteLength} bytes cost=${result.cost ?? 'not quoted'}`);
   return ready(db, row, path, image.bytes.byteLength);
 }
 
 /* ── the route ───────────────────────────────────────────────────── */
 
 export async function GET(request: NextRequest) {
-  if (!process.env.FLUX_API_KEY) return failed(MISSING_KEY, 500);
+  /* No key check up here any more: which variable has to be set depends on which
+     provider this job belongs to, and in cloud mode that is only known once the
+     row has been read. Each mode checks its own once it knows. */
+  const q = request.nextUrl.searchParams;
   /* The mode decides, not which query parameters turned up — a cloud deployment
      handed `?pollUrl=` is a client bug, and serving it would be an unauthenticated
      poll of whatever job the caller named. */
-  const q = request.nextUrl.searchParams;
   return isCloud() ? cloud(q) : local(q);
 }

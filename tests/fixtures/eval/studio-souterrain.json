@@ -1,0 +1,354 @@
+{
+ "schema": 2,
+ "id": "studio-souterrain",
+ "name": "Souterrain studio",
+ "createdAt": 1787011200000,
+ "updatedAt": 1787011200000,
+ "source": null,
+ "floors": [
+  {
+   "id": "studio-souterrain-f0",
+   "name": "Souterrain",
+   "level": 0,
+   "walls": [
+    {
+     "id": "studio-souterrain-w0",
+     "a": {
+      "x": 0,
+      "y": 0
+     },
+     "b": {
+      "x": 760,
+      "y": 0
+     },
+     "t": 20,
+     "openings": [
+      {
+       "id": "studio-souterrain-o0",
+       "at": 0.4,
+       "type": "window",
+       "width": 200,
+       "flip": 0,
+       "side": 0
+      }
+     ]
+    },
+    {
+     "id": "studio-souterrain-w1",
+     "a": {
+      "x": 760,
+      "y": 0
+     },
+     "b": {
+      "x": 760,
+      "y": 560
+     },
+     "t": 20,
+     "openings": []
+    },
+    {
+     "id": "studio-souterrain-w2",
+     "a": {
+      "x": 760,
+      "y": 560
+     },
+     "b": {
+      "x": 0,
+      "y": 560
+     },
+     "t": 20,
+     "openings": [
+      {
+       "id": "studio-souterrain-o1",
+       "at": 0.9,
+       "type": "door",
+       "width": 95,
+       "flip": 0,
+       "side": 0
+      }
+     ]
+    },
+    {
+     "id": "studio-souterrain-w3",
+     "a": {
+      "x": 0,
+      "y": 560
+     },
+     "b": {
+      "x": 0,
+      "y": 0
+     },
+     "t": 20,
+     "openings": [
+      {
+       "id": "studio-souterrain-o2",
+       "at": 0.5,
+       "type": "window",
+       "width": 140,
+       "flip": 0,
+       "side": 0
+      }
+     ]
+    },
+    {
+     "id": "studio-souterrain-w4",
+     "a": {
+      "x": 520,
+      "y": 360
+     },
+     "b": {
+      "x": 520,
+      "y": 560
+     },
+     "t": 10,
+     "openings": [
+      {
+       "id": "studio-souterrain-o3",
+       "at": 0.5,
+       "type": "door",
+       "width": 80,
+       "flip": 0,
+       "side": 0
+      }
+     ]
+    },
+    {
+     "id": "studio-souterrain-w5",
+     "a": {
+      "x": 520,
+      "y": 360
+     },
+     "b": {
+      "x": 760,
+      "y": 360
+     },
+     "t": 10,
+     "openings": []
+    }
+   ],
+   "areas": [
+    {
+     "id": "studio-souterrain-a0",
+     "poly": [
+      {
+       "x": 0,
+       "y": 0
+      },
+      {
+       "x": 760,
+       "y": 0
+      },
+      {
+       "x": 760,
+       "y": 360
+      },
+      {
+       "x": 520,
+       "y": 360
+      },
+      {
+       "x": 520,
+       "y": 560
+      },
+      {
+       "x": 0,
+       "y": 560
+      }
+     ],
+     "name": "Studio",
+     "color": "#E4DCC5",
+     "nx": 0,
+     "ny": 0,
+     "label": true
+    },
+    {
+     "id": "studio-souterrain-a1",
+     "poly": [
+      {
+       "x": 520,
+       "y": 360
+      },
+      {
+       "x": 760,
+       "y": 360
+      },
+      {
+       "x": 760,
+       "y": 560
+      },
+      {
+       "x": 520,
+       "y": 560
+      }
+     ],
+     "name": "Doucheruimte",
+     "color": "#C6B9AA",
+     "nx": 0,
+     "ny": 0,
+     "label": true
+    }
+   ],
+   "items": [
+    {
+     "id": "studio-souterrain-i0",
+     "kind": "stairU",
+     "x": 660,
+     "y": 190,
+     "w": 105,
+     "h": 260,
+     "rot": 0,
+     "color": "#8C857A",
+     "label": "Stairs",
+     "desc": "the only way up to the ground floor"
+    },
+    {
+     "id": "studio-souterrain-i1",
+     "kind": "bed160",
+     "x": 110,
+     "y": 160,
+     "w": 160,
+     "h": 210,
+     "rot": 0,
+     "color": "#B08BB0",
+     "label": "Queen 160"
+    },
+    {
+     "id": "studio-souterrain-i2",
+     "kind": "wardr",
+     "x": 300,
+     "y": 45,
+     "w": 160,
+     "h": 62,
+     "rot": 0,
+     "color": "#B08BB0",
+     "label": "Wardrobe"
+    },
+    {
+     "id": "studio-souterrain-i3",
+     "kind": "sofa3",
+     "x": 420,
+     "y": 120,
+     "w": 225,
+     "h": 95,
+     "rot": 0,
+     "color": "#C7A44E",
+     "label": "Sofa 3-seat"
+    },
+    {
+     "id": "studio-souterrain-i4",
+     "kind": "coffee",
+     "x": 420,
+     "y": 235,
+     "w": 110,
+     "h": 60,
+     "rot": 0,
+     "color": "#C7A44E",
+     "label": "Coffee table"
+    },
+    {
+     "id": "studio-souterrain-i5",
+     "kind": "shelf",
+     "x": 540,
+     "y": 45,
+     "w": 90,
+     "h": 32,
+     "rot": 0,
+     "color": "#C7A44E",
+     "label": "Bookshelf"
+    },
+    {
+     "id": "studio-souterrain-i6",
+     "kind": "ktable",
+     "x": 300,
+     "y": 380,
+     "w": 100,
+     "h": 100,
+     "rot": 0,
+     "color": "#8FA9C4",
+     "label": "Round table 4p"
+    },
+    {
+     "id": "studio-souterrain-i7",
+     "kind": "kcount",
+     "x": 175,
+     "y": 513,
+     "w": 120,
+     "h": 62,
+     "rot": 0,
+     "color": "#8FA9C4",
+     "label": "Counter run"
+    },
+    {
+     "id": "studio-souterrain-i8",
+     "kind": "sink",
+     "x": 295,
+     "y": 513,
+     "w": 80,
+     "h": 60,
+     "rot": 0,
+     "color": "#8FA9C4",
+     "label": "Sink"
+    },
+    {
+     "id": "studio-souterrain-i9",
+     "kind": "hob",
+     "x": 385,
+     "y": 513,
+     "w": 62,
+     "h": 60,
+     "rot": 0,
+     "color": "#8FA9C4",
+     "label": "Hob"
+    },
+    {
+     "id": "studio-souterrain-i10",
+     "kind": "fridge",
+     "x": 470,
+     "y": 513,
+     "w": 70,
+     "h": 70,
+     "rot": 0,
+     "color": "#8FA9C4",
+     "label": "Fridge"
+    },
+    {
+     "id": "studio-souterrain-i11",
+     "kind": "shower",
+     "x": 700,
+     "y": 430,
+     "w": 92,
+     "h": 92,
+     "rot": 0,
+     "color": "#6FA8B5",
+     "label": "Shower"
+    },
+    {
+     "id": "studio-souterrain-i12",
+     "kind": "toilet",
+     "x": 560,
+     "y": 400,
+     "w": 40,
+     "h": 68,
+     "rot": 0,
+     "color": "#6FA8B5",
+     "label": "Toilet"
+    },
+    {
+     "id": "studio-souterrain-i13",
+     "kind": "basin",
+     "x": 560,
+     "y": 510,
+     "w": 62,
+     "h": 50,
+     "rot": 0,
+     "color": "#6FA8B5",
+     "label": "Basin"
+    }
+   ],
+   "notes": [],
+   "dims": [],
+   "lines": [],
+   "ref": null
+  }
+ ]
+}

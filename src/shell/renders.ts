@@ -1,4 +1,5 @@
 import type { ViewKind } from '@engine/prompt';
+import type { ControlKind } from '@data/providers';
 import { ed } from '@state/store';
 import { isCloud } from '@data/config';
 import {
@@ -41,6 +42,23 @@ export interface RenderSettings {
   dimensions: boolean;
   roomLabels: boolean;
   imgMeasures: boolean;
+  /** object names baked into the reference image. Absent on every record
+   *  written before it existed, and those were all rendered without them. */
+  imgLabels?: boolean;
+  /** Which provider drew it — an id from `@data/providers`, and the one field
+   *  here that is not a preference: it is what makes a render reproducible at
+   *  all, since the same prompt and seed on another model is another picture.
+   *  Absent on every record written before there was a choice, and every one of
+   *  those was FLUX.2 [max]. */
+  provider?: string;
+  /** The control maps that were asked for, in attach order — the order the
+   *  prompt numbered them in. What was actually sent is this list narrowed by the
+   *  provider (`attachedControls`), which is a function of `provider` and so is
+   *  not stored twice. */
+  controls?: ControlKind[];
+  /** 0..1. Absent means the render predates the dial, which is the same picture
+   *  as a provider that has no channel to turn. */
+  controlScale?: number;
 }
 
 export interface RenderRecord {
@@ -53,6 +71,9 @@ export interface RenderRecord {
   prompt: string;
   settings: RenderSettings;
   seed: number | null;
+  /** The provider's label, for a person reading the filmstrip — `modelLabelOf`
+   *  writes it. The id a re-run resolves against is `settings.provider`; this
+   *  string is display copy and nothing branches on it. */
   model: string;
   status: 'pending' | 'ready' | 'failed';
   error?: string;

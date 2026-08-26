@@ -496,6 +496,55 @@ textarea.src:focus{border-color:var(--vermilion)}
 .ctx-desc input::placeholder{color:var(--tx-3)}
 
 /* ---------- image-generator export ---------- */
+
+/* ── drawing your own object ────────────────────────────────────────────
+   The catalogue cannot hold everything a Dutch listing puts on a plan, so the
+   tray's empty state is a door rather than a dead end. Two columns: the drawing
+   on the left at the footprint's own aspect ratio, everything it needs a number
+   for on the right. */
+.modal.shape{max-width:720px}
+/* minmax(0,1fr), not 1fr: a fr track keeps an automatic min-content floor, and
+   the fields and preset buttons in the right column pushed that floor past the
+   space available — which squeezed the auto track to 212 px, and `align-items:
+   center` in the column then centred a 300 px canvas inside it. The drawing
+   surface hung 44 px out either side of the modal, `overflow:hidden` clipped the
+   left strip, and clicks there landed on the backdrop and closed the editor. */
+.shape-b{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:20px;align-items:start}
+.shape-draw{display:flex;flex-direction:column;gap:9px;align-items:center}
+.shape-canvas{
+  position:relative;border:1px solid var(--line-hi);border-radius:6px;
+  background:var(--paper);box-shadow:0 1px 0 #ffffff14 inset;
+  touch-action:none;cursor:crosshair;
+}
+.shape-canvas canvas{position:absolute;inset:0;width:100%;height:100%}
+/* The footprint's edge, inset by the drawing surface's own margin. Dashed and
+   quiet: it is a boundary, not part of the object being drawn. */
+.shape-field{
+  position:absolute;pointer-events:none;border:1px dashed var(--line-hi);border-radius:2px;
+}
+.shape-acts{display:flex;gap:6px}
+.shape-side{display:flex;flex-direction:column;gap:11px;min-height:300px;min-width:0}
+.shape-presets{display:flex;flex-wrap:wrap;gap:6px}
+.shape-go{display:flex;gap:8px;justify-content:flex-end}
+/* The way in that is always there, under the results — the empty state is only
+   reached by someone whose search failed, and half the time they gave up on the
+   word rather than on the object. */
+.tray-make{
+  display:flex;align-items:center;gap:10px;margin-bottom:14px;padding-bottom:14px;
+  border-bottom:1px solid var(--line);
+}
+.tray-make .hint{font-size:11px}
+.empty .btn{margin-top:12px}
+/* Only on hover, and only on a tile that is one of yours: a delete that is
+   always visible is a delete somebody eventually hits by accident. */
+.tile-x{
+  position:absolute;top:3px;right:5px;width:16px;height:16px;border-radius:4px;
+  display:flex;align-items:center;justify-content:center;
+  font:400 13px/1 var(--sans);color:var(--tx-3);opacity:0;transition:.12s var(--ease);
+}
+.tile:hover .tile-x{opacity:1}
+.tile-x:hover{background:#D14B4533;color:var(--danger)}
+
 .modal.ai{max-width:1060px}
 /* stretch, not start: the right column is the taller one now, and the prompt
    grows into the space instead of leaving a hole under it */

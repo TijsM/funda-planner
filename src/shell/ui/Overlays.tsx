@@ -6,11 +6,13 @@ import { CATALOG, CAT_BY_KIND, ROOM_SWATCHES, SWATCHES, toneFor } from '@engine/
 import { dist, fmtM2, polyArea, R2 } from '@engine/geometry';
 import { labelOf, setDesc, setLabel } from '@engine/model';
 import { selScreenBBox, snapPoint, toWorld } from '@engine/view';
-import type { Area, Item, Layers, Note, Opening, SelObj, Wall } from '@engine/types';
+import type { Area, Item, Layers, Note, Opening, SelObj, Shape, Wall } from '@engine/types';
+import { drawShape, shapesOf } from '@engine/custom';
 import {
   SPECIALS, addOpeningTo, deleteSelection, duplicateSelection, placeCatalogItem,
-  placeSpecial, rotateSelection, type SpecialKind,
+  placeSpecial, removeShape, rotateSelection, type SpecialKind,
 } from '../commands';
+import { copySelection } from '../clipboard';
 import { coachSeen, markCoachSeen } from '../storage';
 import { Icon } from './Icons';
 
@@ -19,6 +21,10 @@ import { Icon } from './Icons';
 export function AddTray() {
   const open = useEditor(s => s.trayOpen);
   const place = useEditor(s => s.place);
+  const project = useEditor(s => s.project);
+  /* Shapes are written into the project in place, like every other edit, so the
+     tray has to redraw on the revision counter rather than on the array. */
+  useEditor(s => s.rev);
   const [q, setQ] = useState('');
   const search = useRef<HTMLInputElement>(null);
   const match = (s: string) => !q || s.toLowerCase().includes(q.trim().toLowerCase());
@@ -43,7 +49,13 @@ export function AddTray() {
       items: g.items.filter(i => match(i.name) || match(g.group) || match(i.alt ?? '')),
     }))
     .filter(g => g.items.length);
-  const empty = !draw.length && !groups.length;
+  const mine = shapesOf(project?.shapes).filter(x => match(x.name));
+  const empty = !draw.length && !groups.length && !mine.length;
+
+  /* The search box is where someone says what they were looking for, so it is
+     also where the answer "we do not have that, draw it" belongs. Seeded with
+     whatever they typed: they have already named the thing once. */
+  const drawYourOwn = () => ed().patch({ modal: 'shape', shapeSeed: q.trim() });
 
   /* click arms the object and gets out of the way; drag drops it directly */
   const arm = (kind: string, e: React.PointerEvent) => {
@@ -110,7 +122,37 @@ export function AddTray() {
       </div>
       <div className="tray-b" id="trayBody">
         {empty && (
-          <div className="empty"><Icon id="i-search" /><p>Nothing matches that.</p></div>
+          <div className="empty">
+            <Icon id="i-search" />
+            <p>Nothing in the catalogue matches that.</p>
+            <button className="btn pri" id="trayMake" onClick={drawYourOwn}>
+              Draw {q.trim() ? `a "${q.trim()}"` : 'your own'}
+            </button>
+          </div>
+        )}
+        {!!mine.length && (
+          <div className="tgroup">
+            <span className="lbl">Yours</span>
+            <div className="tgrid">
+              {mine.map(x => (
+                <button
+                  key={x.id} className={`tile${place === x.id ? ' on' : ''}`}
+                  data-kind={x.id} title={`${x.name} — ${x.w}×${x.h} cm, ${x.z ?? 75} cm tall`}
+                  onPointerDown={e => arm(x.id, e)}
+                >
+                  <ShapePreview shape={x} />
+                  <b>{x.name}</b>
+                  <em>{x.w}×{x.h}</em>
+                  {/* Placed objects carry their own copy of the drawing, so this
+                      takes it out of the tray and breaks nothing on any floor. */}
+                  <span
+                    className="tile-x" role="button" tabIndex={-1} title="Remove from the tray"
+                    onPointerDown={e => { e.stopPropagation(); removeShape(x.id); }}
+                  >&times;</span>
+                </button>
+              ))}
+            </div>
+          </div>
         )}
         {!!draw.length && (
           <div className="tgroup draw">
@@ -128,6 +170,14 @@ export function AddTray() {
                 </button>
               ))}
             </div>
+          </div>
+        )}
+        {!empty && (
+          <div className="tray-make">
+            <button className="btn" id="trayMakeAlso" onClick={drawYourOwn}>
+              <Icon id="i-plus" /> Draw your own
+            </button>
+            <span className="hint">for whatever the catalogue is missing</span>
           </div>
         )}
         {groups.map(g => (
@@ -151,6 +201,33 @@ export function AddTray() {
       </div>
     </div>
   );
+}
+
+/** A drawn shape's own preview. Separate from GlyphPreview because a custom
+ *  object has no catalogue row to look a tone or a glyph up from — but it goes
+ *  through `drawShape`, which is the same function the plan draws it with, so the
+ *  tile cannot show something the canvas will not. */
+export function ShapePreview({ shape, w = 124, h = 80 }: { shape: Shape; w?: number; h?: number }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const cv = ref.current;
+    if (!cv) return;
+    const d = Math.min(window.devicePixelRatio || 1, 2);
+    cv.width = w * d; cv.height = h * d;
+    const g = cv.getContext('2d');
+    if (!g) return;
+    g.setTransform(d, 0, 0, d, 0, 0);
+    const k = Math.min((w - 16) / shape.w, (h - 14) / shape.h);
+    g.translate(w / 2, h / 2);
+    g.scale(k, k);
+    const col = toneFor(undefined);
+    g.fillStyle = `${col}4d`;
+    g.strokeStyle = col;
+    g.lineWidth = 1.5 / k;
+    g.lineJoin = 'round';
+    try { drawShape(g, shape, shape.w, shape.h); } catch { /* never break the tray */ }
+  }, [shape, w, h]);
+  return <canvas ref={ref} width={w} height={h} data-tprev={shape.id} />;
 }
 
 /** the catalogue glyph, drawn with the same code that draws it on the plan */
@@ -315,6 +392,19 @@ const CB = (id: string, icon: string, title: string, onClick: () => void, cls = 
   </button>
 );
 
+/** The three things every object on the plan can do, in the same order on every
+ *  toolbar — a wall is no less copyable than a sofa, and someone who found the
+ *  buttons once should not have to look for them again. */
+function ObjActions({ del = 'Delete' }: { del?: string }) {
+  return (
+    <>
+      {CB('ctxCopy', 'i-copy', 'Copy  (⌘C)  ·  paste with ⌘V, here or in another plan', () => { void copySelection(); })}
+      {CB('ctxDup', 'i-dup', 'Duplicate  (⌘D)', duplicateSelection)}
+      {CB('ctxDel', 'i-trash', del, deleteSelection, 'dgr')}
+    </>
+  );
+}
+
 function Swatches({ list, cur, onPick }: { list: string[]; cur?: string; onPick: (c: string) => void }) {
   return (
     <span className="swrow">
@@ -336,8 +426,7 @@ function ToolbarBody({ sel }: { sel: SelObj[] }) {
         <span className="val" style={{ color: 'var(--tx-2)' }}>{sel.length} selected</span>
         <span className="div" />
         {CB('ctxRot', 'i-rot', 'Rotate 90°', () => rotateSelection(90))}
-        {CB('ctxDup', 'i-copy', 'Duplicate', duplicateSelection)}
-        {CB('ctxDel', 'i-trash', 'Delete', deleteSelection, 'dgr')}
+        <ObjActions />
       </>
     );
   }
@@ -357,8 +446,7 @@ function ToolbarBody({ sel }: { sel: SelObj[] }) {
           onPick={c => { const s = ed(); s.pushUndo(); s0.o.color = c; s.touch(); }}
         />
         <span className="div" />
-        {CB('ctxDup', 'i-copy', 'Duplicate', duplicateSelection)}
-        {CB('ctxDel', 'i-trash', 'Delete', deleteSelection, 'dgr')}
+        <ObjActions />
       </>
     );
   }
@@ -367,7 +455,7 @@ function ToolbarBody({ sel }: { sel: SelObj[] }) {
     <>
       <span className="val">{L >= 100 ? `${(L / 100).toFixed(2)} m` : `${Math.round(L)} cm`}</span>
       <span className="div" />
-      {CB('ctxDel', 'i-trash', 'Delete', deleteSelection, 'dgr')}
+      <ObjActions />
     </>
   );
 }
@@ -393,8 +481,7 @@ function ItemBar({ o }: { o: Item }) {
       <span className="div" />
       <Swatches list={SWATCHES.slice(0, 6)} cur={o.color} onPick={c2 => { const s = ed(); s.pushUndo(); o.color = c2; s.touch(); }} />
       <span className="div" />
-      {CB('ctxDup', 'i-copy', 'Duplicate', duplicateSelection)}
-      {CB('ctxDel', 'i-trash', 'Delete', deleteSelection, 'dgr')}
+      <ObjActions />
     </>
   );
 }
@@ -415,7 +502,7 @@ function WallBar({ o }: { o: Wall }) {
         <u>cm thick</u>
       </span>
       <span className="div" />
-      {CB('ctxDel', 'i-trash', 'Delete wall', deleteSelection, 'dgr')}
+      <ObjActions del="Delete wall" />
     </>
   );
 }
@@ -435,7 +522,7 @@ function OpeningBar({ o, wall }: { o: Opening; wall: Wall }) {
       {CB('ctxHinge', 'i-flip', 'Swap hinge', () => { const s = ed(); s.pushUndo(); o.flip = o.flip ? 0 : 1; s.touch(); })}
       {CB('ctxSide', 'i-rot', 'Swing the other way', () => { const s = ed(); s.pushUndo(); o.side = o.side ? 0 : 1; s.touch(); })}
       <span className="div" />
-      {CB('ctxDel', 'i-trash', 'Remove', deleteSelection, 'dgr')}
+      <ObjActions del="Remove" />
     </>
   );
 }
@@ -454,7 +541,7 @@ function AreaBar({ o }: { o: Area }) {
       <span className="div" />
       <Swatches list={ROOM_SWATCHES.slice(0, 6)} cur={o.color} onPick={c => { const s = ed(); s.pushUndo(); o.color = c; s.touch(); }} />
       <span className="div" />
-      {CB('ctxDel', 'i-trash', 'Delete room', deleteSelection, 'dgr')}
+      <ObjActions del="Delete room" />
     </>
   );
 }
@@ -478,7 +565,8 @@ function NoteBar({ o }: { o: Note }) {
       <span className="div" />
       {CB('ctxBig', 'i-zin', 'Bigger', () => size(1.25))}
       {CB('ctxSmall', 'i-zout', 'Smaller', () => size(1 / 1.25))}
-      {CB('ctxDel', 'i-trash', 'Delete', deleteSelection, 'dgr')}
+      <span className="div" />
+      <ObjActions />
     </>
   );
 }
