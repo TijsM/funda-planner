@@ -1,13 +1,15 @@
 import { uid } from '@engine/geometry';
 import { ed } from '@state/store';
 import {
-  MODEL_LABEL, POLL_TIMEOUT_MESSAGE, POLL_TIMEOUT_MS, acceptJob, applyPoll, busy, failJob,
-  inFlight, nextSeed, outputDims, pollDelay, rs, settingsOf, startJob, timedOut,
+  POLL_TIMEOUT_MESSAGE, POLL_TIMEOUT_MS, acceptJob, applyPoll, busy, failJob, inFlight,
+  nextSeed, outputDims, pollDelay, rs, startJob, submittedSettings, timedOut,
   type PollResponse, type RenderJob,
 } from '@state/renders';
+import { MAX_USD_PER_IMAGE, metaOf, modelLabelOf } from '@data/providers';
 import { isCloud } from '@data/config';
 import { ensurePlanSynced } from '@data/sync';
 import { cloudRowId, noteRowId, resumePending, uploadThumbnail } from '@data/cloudRenders';
+import { pngBase64, referenceOpts, renderControlCanvases } from './files';
 import { listRenders, pngFromBase64, putRender, renderBlob, type RenderRecord } from './renders';
 
 /** Drives one render from Generate to a row in the filmstrip.
@@ -99,11 +101,20 @@ function stopPolling() {
 
 /** Where the job is asked about. In cloud mode that is a row uuid and nothing
  *  else: the provider's URL is read from the row server-side, so no browser can
- *  point the poll at a job it was merely handed the id of. */
-const statusUrl = (job: RenderJob): string =>
+ *  point the poll at a job it was merely handed the id of.
+ *
+ *  Local mode has no row to read, so the provider travels in the query — and it
+ *  has to. The route checks the pollUrl against that provider's own hosts and
+ *  nothing else, so an unnamed job is tried as FLUX.2 and every fal render dies
+ *  at the host check having already been paid for. Resolved through `metaOf`
+ *  rather than sent raw: settings from before the picker carry no provider at
+ *  all, and the route refuses the literal string "undefined" by name. */
+export const statusUrl = (job: RenderJob): string =>
   job.renderId
     ? `/api/render/status?renderId=${encodeURIComponent(job.renderId)}`
-    : `/api/render/status?jobId=${encodeURIComponent(job.jobId)}&pollUrl=${encodeURIComponent(job.pollUrl)}`;
+    : `/api/render/status?jobId=${encodeURIComponent(job.jobId)}`
+      + `&provider=${encodeURIComponent(metaOf(job.settings.provider).id)}`
+      + `&pollUrl=${encodeURIComponent(job.pollUrl)}`;
 
 async function pollOnce(id: string) {
   timer = null;
@@ -191,7 +202,10 @@ function recordOf(
     prompt: job.prompt,
     settings: job.settings,
     seed: job.seed,
-    model: MODEL_LABEL,
+    /* The provider that actually drew it, read off the settings the job was
+       submitted with rather than a constant — the filmstrip shows this string
+       and it is the only place a person can see which model to blame. */
+    model: modelLabelOf(job.settings.provider),
     /* Bytes *or* a URL to them — a cloud record is `ready` with `blob` null, and
        reading emptiness as failure would mark every cloud render failed. */
     status: out.blob || out.imageUrl ? 'ready' : 'failed',
@@ -385,8 +399,13 @@ export async function startRender(canvas: HTMLCanvasElement | null): Promise<voi
     return;
   }
 
+  /* The maps this provider will actually be given, resolved before the record is
+     built: `submittedSettings` is what makes the row a receipt for the render that
+     went rather than for the boxes that were ticked. */
+  const settings = submittedSettings(r);
+  const kinds = settings.controls ?? [];
   const seed = nextSeed(r.seed, r.seedLocked);
-  const { width, height } = outputDims(canvas.width, canvas.height);
+  const { width, height } = outputDims(canvas.width, canvas.height, settings.provider);
   const job: RenderJob = {
     id: uid(),
     jobId: '',
@@ -395,7 +414,7 @@ export async function startRender(canvas: HTMLCanvasElement | null): Promise<voi
     floorId: floor.id,
     parentId: r.parentId,
     prompt,
-    settings: settingsOf(r),
+    settings,
     seed,
     width,
     height,
@@ -408,9 +427,38 @@ export async function startRender(canvas: HTMLCanvasElement | null): Promise<voi
   rs().patch({ ...startJob(rs(), job), seed: String(seed) });
   startClock();
 
+  /* The maps, drawn after the slot is claimed and not before: two passes plus
+     their PNG encoding is a few hundred milliseconds of synchronous work, and the
+     second half of a double-click arrives inside it. */
+  const drawn = kinds.length
+    ? renderControlCanvases(floor, kinds, referenceOpts(settings))
+    : [];
+  /* Same frame or nothing. Both this and the reference canvas are framed by
+     `referenceOpts`, so they agree by construction — but a control map even a few
+     pixels off the picture it conditions is geometry for a plan that was never
+     sent, and the provider would resize it rather than complain. Cheap to check,
+     and the only honest answer if it ever fails is not to spend the money. */
+  const framed = drawn.filter(m => m.canvas.width === canvas.width && m.canvas.height === canvas.height);
+  if (framed.length !== kinds.length) {
+    await giveUp(
+      job,
+      'The control maps came out framed differently from the reference image, so the render would be'
+      + ' conditioned on geometry it was not sent. Turn the maps off and try again.',
+    );
+    return;
+  }
+  const controls = framed.map(m => ({ kind: m.kind, base64: pngBase64(m.canvas) }));
+
   const cloud = isCloud();
   const req: Record<string, unknown> = {
     prompt, imageBase64: canvas.toDataURL('image/png'), width, height, seed,
+    /* Always sent, even for the default: the route resolving a missing id to its
+       own default is how a deployment upgrade silently re-points every render. */
+    provider: settings.provider,
+    /* The dial travels with the maps or not at all — on a provider with no
+       control channel it turns nothing, and a field that cannot matter reads in
+       the log as though it did. */
+    ...(controls.length ? { controls, controlScale: settings.controlScale } : {}),
   };
 
   if (cloud) {
@@ -433,7 +481,12 @@ export async function startRender(canvas: HTMLCanvasElement | null): Promise<voi
       renderClientId: job.id,
       parentId: job.parentId,
       settings: job.settings,
-      model: MODEL_LABEL,
+      /* No `model`: the route writes `renders.model` itself, and it writes the
+         provider ID rather than the label, because that column is the only thing
+         that can poll the job again. Sending the label here was a second answer
+         to the same question, ignored server-side and wrong if it ever won.
+         `src/data/cloudRenders.ts` turns the id back into a label on the way
+         out — the local path's `modelLabelOf` and that one are the same call. */
     });
   }
 
@@ -464,6 +517,17 @@ export async function startRender(canvas: HTMLCanvasElement | null): Promise<voi
     return;
   }
   if (renderId) noteRowId(job.id, renderId);
+
+  /* The ceiling is asserted before the money leaves, so by the time the vendor's
+     own quote disagrees with it the render is already paid for and the only thing
+     left is to say so. It goes to the person who pressed Generate rather than only
+     to a server log, because they are the one who will be charged again on the next
+     press: our per-megapixel rate is wrong and every render until it is corrected
+     costs more than the panel claims. */
+  if (body?.overCeiling === true) {
+    const quoted = typeof body.quotedUsd === 'number' ? `$${body.quotedUsd.toFixed(3)}` : 'more than the ceiling';
+    ed().toast(`The provider quoted ${quoted} for that render — over the $${MAX_USD_PER_IMAGE.toFixed(2)} ceiling. The rate in the picker is wrong; stop rendering on this provider until it is fixed.`, 'err');
+  }
 
   const accepted = acceptJob(rs(), job.id, jobId, pollUrl, renderId || undefined);
   rs().patch(accepted);

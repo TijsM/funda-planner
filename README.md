@@ -93,14 +93,21 @@ layer toggles, floor management. The choice is remembered.
 
 **Render** in the top bar produces the two things a generator needs:
 
-- **A prompt written from the actual geometry** — the address and floor, overall footprint, every
-  named room with its area and where it sits on the plan, the furniture actually placed in each one
-  with real dimensions, which sides the windows are on (so the light comes from the right
-  direction), and explicit instructions not to invent walls or rooms. Four viewpoints (top-down,
-  eye level, isometric, watercolour sketch) rewrite it; you can scope it to a single room, add your
-  own style line, and edit the text before copying.
+- **A prompt written from the actual geometry** — the camera and the reference image first, as hard
+  constraints, then a LOCKED block: the floor and its footprint, every named room with its area and
+  where it sits on the plan as a table, every object on its own row as another, which sides the
+  windows are on (so the light comes from the right direction), and explicit instructions not to
+  invent walls or rooms. Where an object sits is left to the drawing: position stated in prose is
+  measurably unreliable, and it is pixel-exact on the reference image. Four viewpoints (top-down,
+  eye level, isometric, watercolour sketch) rewrite it; you can scope it to a single room, add your own style line, and
+  edit the text before copying. The street address is deliberately not in it: it steers nothing in
+  an image and pulls the model towards whatever real building it half-remembers.
 - **A clean reference image** to attach — the plan with no grid, no dimension lines, no notes and no
-  UI, so the model copies the layout instead of the drawing furniture.
+  UI, so the model copies the layout instead of the drawing furniture. Object names *are* on it by
+  default: the prompt can say where the staircase is, but the picture is what gets copied, and an
+  unnamed block on it becomes whatever the model decides. The brief tells the model those captions
+  are a key to read rather than lettering to draw. Lettering can still bleed into a render, so it is
+  a toggle — as are room names and measurements, both off by default for that reason.
 
 Copy either to the clipboard, or download the image.
 
@@ -108,17 +115,64 @@ Copy either to the clipboard, or download the image.
 
 Every object and every room takes a **description** — free text, empty by default. Select something
 and press the ✦ button for a one-line field; the Pro inspector has the same field with more room.
-Whatever you write is spliced in next to that object or room, and the brief then tells the model
-these are deliberate instructions rather than flavour text:
+Whatever you write lands in the Notes column of the row for that object or room, and the LOCKED
+header tells the model every Notes cell is an instruction rather than flavour text:
 
 ```
-- Woonkamer, 26.2 m², on the west side — wide oak floorboards, low winter light.
-  Contains: sofa 3-seat (225×95 cm) — dark green velvet, mid-century, low back; coffee table (110×60 cm).
+ROOMS
+Room | Size | Where | Notes
+Woonkamer | 26.2 m² | west | wide oak floorboards, low winter light
+
+OBJECTS — each one is already drawn on the plan; keep it exactly where it is
+Room | Object | Size | Notes
+Woonkamer | sofa 3-seat | 225×95 cm | dark green velvet, mid-century, low back
+Woonkamer | coffee table | 110×60 cm | —
 ```
+
+The **Size** column only appears when *Include measurements* is on: a size in the prose is an
+invitation to letter the render with it, which is the same failure as our own dimension captions.
 
 A described object is listed even when it is a fitted unit imported from the listing, which is
 otherwise skipped as noise. Object descriptions follow the *List the furniture* toggle; room
 descriptions are always included.
+
+### The render itself
+
+The Next build renders the plan for you rather than handing you a brief to carry elsewhere. What
+comes back drifts — the camera tilts into a dollhouse view, walls wander, chair counts change — and
+the reason is documented by the vendor: FLUX.2 reads its reference image *semantically*. There is no
+strength dial and no control map in its API, so no amount of prompting fixes it.
+
+So the panel offers two things beyond Generate:
+
+- **Model** — five providers, priced per output megapixel and quoted at the largest size each one can
+  draw inside the ceiling, so the figures are comparable before you spend anything. Two of them take
+  a real **control map**: an image, not a sentence, that the model is required to follow. FLUX.2 has
+  no such channel — a map sent there rides along as another reference picture, and whether it reads
+  it as geometry is unproven. The panel says which of the two you are getting.
+- **Maps** — a line drawing, a depth map, a segmentation map or a change mask, all drawn from the
+  same vector geometry as the plan and framed identically to the reference. A provider with a control
+  channel takes one at a time; one without takes two, because each one costs the brief a sentence and
+  the documented sweet spot is 30–80 words. Anything you tick that will not be sent is named, with
+  the reason.
+
+**No single image may cost more than $0.10.** That is enforced in the code and not merely printed:
+the size is aimed under it, the route refuses a request over it, and a provider that publishes no
+price at all is refused outright — an unpriced call cannot be shown to be under a ceiling. One
+provider bills whole megapixels rounded up, which limits it to exactly 1 MP; the picker says so
+rather than letting it arrive as a 400.
+
+Whether any of this actually holds a layout is measured, not eyeballed — see
+[`docs/EVAL.md`](docs/EVAL.md) and `pnpm eval`.
+
+### Style
+
+The **Style** field is free text and always has been — type anything and it goes through verbatim,
+last in the brief, where it outranks the default daylight and material wording. Naming one of the
+styles the field suggests (Scandinavian, Japandi, Mid-century modern, Industrial, Minimalist, Modern
+farmhouse, Coastal, Art deco, Bohemian, Classic Dutch) adds a line spelling out the materials,
+colours and light that word is supposed to mean — a bare label is one token competing with a
+hundred others. Your own words are stated first and win wherever the two disagree.
 
 ## The rest
 
@@ -140,8 +194,10 @@ descriptions are always included.
 ## Keyboard
 
 `V H W R D N T M` tools (Pro) · `G` grid · `S` snapping · `B` reference image · `L` ghost floor
-below · `A` Add tray (Simple) · `⌘Z` / `⇧⌘Z` undo, redo · `⌘D` duplicate · `⌫` delete · `0` fit ·
-`⌘S` save · space-drag to pan · wheel to zoom · arrows to nudge (⇧ = 10×)
+below · `A` Add tray (Simple) · `⌘Z` / `⇧⌘Z` undo, redo · `⌘D` duplicate · `⌘C` / `⌘X` / `⌘V`
+copy, cut, paste — the system clipboard, so a copy crosses tabs and plans; with nothing selected
+`⌘C` copies the whole floor · `⌫` delete · `0` fit · `⌘S` save · space-drag to pan · wheel to zoom ·
+arrows to nudge (⇧ = 10×)
 
 ## Tests
 
@@ -173,5 +229,6 @@ src/data/  src/server/    Supabase: config, schema, plan sync, renders
 app/                      Next routes: the editor, /login, /api/render
 supabase/migrations/      the database, RLS policies and the render bucket
 tests/                    Playwright suite + fixtures, Vitest units
-docs/                     ARCHITECTURE.md, SUPABASE.md
+scripts/eval/             the render-fidelity sweep: run, score, diff
+docs/                     ARCHITECTURE.md, SUPABASE.md, EVAL.md
 ```

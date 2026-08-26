@@ -1,0 +1,298 @@
+{
+ "schema": 2,
+ "id": "openplan-tables",
+ "name": "Open plan warehouse floor",
+ "createdAt": 1787011200000,
+ "updatedAt": 1787011200000,
+ "source": null,
+ "floors": [
+  {
+   "id": "openplan-tables-f0",
+   "name": "Woonverdieping",
+   "level": 0,
+   "walls": [
+    {
+     "id": "openplan-tables-w0",
+     "a": {
+      "x": 0,
+      "y": 0
+     },
+     "b": {
+      "x": 1200,
+      "y": 0
+     },
+     "t": 24,
+     "openings": [
+      {
+       "id": "openplan-tables-o0",
+       "at": 0.2,
+       "type": "window",
+       "width": 220,
+       "flip": 0,
+       "side": 0
+      },
+      {
+       "id": "openplan-tables-o1",
+       "at": 0.5,
+       "type": "window",
+       "width": 220,
+       "flip": 0,
+       "side": 0
+      },
+      {
+       "id": "openplan-tables-o2",
+       "at": 0.8,
+       "type": "window",
+       "width": 220,
+       "flip": 0,
+       "side": 0
+      }
+     ]
+    },
+    {
+     "id": "openplan-tables-w1",
+     "a": {
+      "x": 1200,
+      "y": 0
+     },
+     "b": {
+      "x": 1200,
+      "y": 750
+     },
+     "t": 24,
+     "openings": []
+    },
+    {
+     "id": "openplan-tables-w2",
+     "a": {
+      "x": 1200,
+      "y": 750
+     },
+     "b": {
+      "x": 0,
+      "y": 750
+     },
+     "t": 24,
+     "openings": [
+      {
+       "id": "openplan-tables-o3",
+       "at": 0.35,
+       "type": "window",
+       "width": 260,
+       "flip": 0,
+       "side": 0
+      },
+      {
+       "id": "openplan-tables-o4",
+       "at": 0.7,
+       "type": "window",
+       "width": 260,
+       "flip": 0,
+       "side": 0
+      }
+     ]
+    },
+    {
+     "id": "openplan-tables-w3",
+     "a": {
+      "x": 0,
+      "y": 750
+     },
+     "b": {
+      "x": 0,
+      "y": 0
+     },
+     "t": 24,
+     "openings": [
+      {
+       "id": "openplan-tables-o5",
+       "at": 0.5,
+       "type": "door",
+       "width": 100,
+       "flip": 0,
+       "side": 0
+      }
+     ]
+    }
+   ],
+   "areas": [
+    {
+     "id": "openplan-tables-a0",
+     "poly": [
+      {
+       "x": 0,
+       "y": 0
+      },
+      {
+       "x": 1200,
+       "y": 0
+      },
+      {
+       "x": 1200,
+       "y": 750
+      },
+      {
+       "x": 0,
+       "y": 750
+      }
+     ],
+     "name": "Woonverdieping",
+     "color": "#E4DCC5",
+     "nx": 0,
+     "ny": 0,
+     "label": true,
+     "desc": "one undivided floor — no partitions anywhere"
+    }
+   ],
+   "items": [
+    {
+     "id": "openplan-tables-i0",
+     "kind": "dt8",
+     "x": 300,
+     "y": 200,
+     "w": 220,
+     "h": 100,
+     "rot": 0,
+     "color": "#C7A44E",
+     "label": "Table 8p"
+    },
+    {
+     "id": "openplan-tables-i1",
+     "kind": "dt4",
+     "x": 900,
+     "y": 180,
+     "w": 120,
+     "h": 80,
+     "rot": 0,
+     "color": "#C7A44E",
+     "label": "Table 4p"
+    },
+    {
+     "id": "openplan-tables-i2",
+     "kind": "dtr",
+     "x": 620,
+     "y": 560,
+     "w": 130,
+     "h": 130,
+     "rot": 0,
+     "color": "#C7A44E",
+     "label": "Round 6p"
+    },
+    {
+     "id": "openplan-tables-i3",
+     "kind": "ktable2",
+     "x": 1060,
+     "y": 600,
+     "w": 70,
+     "h": 70,
+     "rot": 0,
+     "color": "#8FA9C4",
+     "label": "Round table 2p"
+    },
+    {
+     "id": "openplan-tables-i4",
+     "kind": "kcount",
+     "x": 1000,
+     "y": 50,
+     "w": 120,
+     "h": 62,
+     "rot": 0,
+     "color": "#8FA9C4",
+     "label": "Counter run"
+    },
+    {
+     "id": "openplan-tables-i5",
+     "kind": "sink2",
+     "x": 860,
+     "y": 50,
+     "w": 120,
+     "h": 60,
+     "rot": 0,
+     "color": "#8FA9C4",
+     "label": "Double sink"
+    },
+    {
+     "id": "openplan-tables-i6",
+     "kind": "hob",
+     "x": 1120,
+     "y": 50,
+     "w": 62,
+     "h": 60,
+     "rot": 0,
+     "color": "#8FA9C4",
+     "label": "Hob"
+    },
+    {
+     "id": "openplan-tables-i7",
+     "kind": "fridge2",
+     "x": 760,
+     "y": 55,
+     "w": 95,
+     "h": 75,
+     "rot": 0,
+     "color": "#8FA9C4",
+     "label": "Am. fridge"
+    },
+    {
+     "id": "openplan-tables-i8",
+     "kind": "kisland",
+     "x": 980,
+     "y": 330,
+     "w": 200,
+     "h": 100,
+     "rot": 0,
+     "color": "#8FA9C4",
+     "label": "Island"
+    },
+    {
+     "id": "openplan-tables-i9",
+     "kind": "sofaL",
+     "x": 210,
+     "y": 560,
+     "w": 265,
+     "h": 200,
+     "rot": 0,
+     "color": "#C7A44E",
+     "label": "L-shaped sofa"
+    },
+    {
+     "id": "openplan-tables-i10",
+     "kind": "tv",
+     "x": 210,
+     "y": 729,
+     "w": 120,
+     "h": 10,
+     "rot": 0,
+     "color": "#C7A44E",
+     "label": "TV"
+    },
+    {
+     "id": "openplan-tables-i11",
+     "kind": "rug",
+     "x": 260,
+     "y": 570,
+     "w": 240,
+     "h": 170,
+     "rot": 0,
+     "color": "#C7A44E",
+     "label": "Rug"
+    },
+    {
+     "id": "openplan-tables-i12",
+     "kind": "potL",
+     "x": 560,
+     "y": 80,
+     "w": 85,
+     "h": 85,
+     "rot": 0,
+     "color": "#8FA98F",
+     "label": "Plant, large"
+    }
+   ],
+   "notes": [],
+   "dims": [],
+   "lines": [],
+   "ref": null
+  }
+ ]
+}

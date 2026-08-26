@@ -137,9 +137,16 @@ test.describe('a description on every object', () => {
     const p = await openRender(page);
     expect(p).toContain('plastered walls, low winter light');
     expect(p).toContain('dark green velvet, mid-century, low back');
-    /* named right next to its object, not dumped in a separate block */
-    expect(p).toMatch(/sofa 3-seat \([\d×]+ cm\) — dark green velvet/);
-    expect(p).toMatch(/deliberate instructions/i);
+    /* On the object's own row, not dumped in a separate block. The brief is
+       columns now rather than sentences — "sofa 3-seat (225×95 cm) — dark green
+       velvet" became a row of an OBJECTS table — because connective prose is
+       something the model weighs differently one line to the next. */
+    expect(p).toMatch(/\| sofa 3-seat \| [\d×]+ cm \| dark green velvet/);
+    /* And the sentence that says a Notes cell is an instruction rather than
+       flavour text. It used to appear only once something was described; it is
+       now part of the LOCKED header and always present, which is why the
+       undescribed case below pins the absence of the description instead. */
+    expect(p).toMatch(/every Notes cell below is an instruction/i);
   });
 
   test('survives save, wipe and reload', async ({ page }) => {
@@ -165,7 +172,12 @@ test.describe('a description on every object', () => {
     await page.locator('#fchips .fchip').nth(1).click();
     await page.waitForTimeout(250);
     const p = await openRender(page);
-    expect(p).not.toMatch(/deliberate instructions/i);
+    /* Nothing was written, so no Notes cell has anything in it — asserted on the
+       rows themselves, since the LOCKED header states the rule unconditionally
+       now and can no longer stand in for "somebody described something". */
     expect(p).toContain('Woonkamer');
+    const rooms = p.split('\n').filter(l => l.startsWith('Woonkamer |'));
+    expect(rooms.length).toBeGreaterThan(0);
+    for (const row of rooms) expect(row).not.toMatch(/velvet|winter light/);
   });
 });

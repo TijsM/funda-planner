@@ -1,10 +1,14 @@
 import type { Floor, Layers, Project } from '@engine/types';
-import { contentBBox, floorArea, shellBBox } from '@engine/model';
+import { floorArea, shellBBox } from '@engine/model';
 import { fmtM2, R2 } from '@engine/geometry';
+import { framedFloor, planFrame } from '@engine/frame';
+import { paintPass, type PassKind } from '@engine/passes';
 import { planFacts } from '@engine/prompt';
 import { paint } from '@engine/render';
 import { parseProject, serializeProject, slug } from '@engine/io/serialize';
+import type { ControlKind } from '@data/providers';
 import { ed } from '@state/store';
+import type { RenderSettings } from './renders';
 
 /** Browser file plumbing: downloads, file reads, and rendering the canvas to a
  *  bitmap. The drawing itself is the engine's paint(); only the plumbing is here. */
@@ -55,73 +59,52 @@ export function readImageFile(file: File, onDone?: () => void) {
   fr.readAsDataURL(file);
 }
 
+export interface FloorCanvasOpts {
+  clean?: boolean; furniture?: boolean; roomLabels?: boolean; maxPx?: number;
+  layers?: Layers; measures?: boolean; objectLabels?: boolean;
+  /** Draw one of the conditioning passes instead of the plan — a line map, a
+   *  depth map, a segmentation map or a change mask, framed identically to the
+   *  reference beside it because both come out of the same `planFrame()`.
+   *
+   *  `'ink'` is deliberately not what the app's own reference uses: a pass draws
+   *  no text at all, and the reference may carry object names (`imgLabels`). The
+   *  two differ by that one bargain and nothing else. */
+  pass?: PassKind;
+}
+
 /** Renders a floor to an offscreen canvas at print-ish resolution. `clean`
- *  strips everything that would confuse an image generator. */
+ *  strips everything that would confuse an image generator.
+ *
+ *  The fit maths lives in `@engine/frame` now, so Node frames a plan exactly the
+ *  way the browser does — a control map framed differently from the reference
+ *  beside it is a control map for a different picture. The default `maxPx` stays
+ *  3600 here and not `planFrame()`'s 1800: this is the print path, and silently
+ *  halving every PNG export is not a refactor. */
 export function renderFloorCanvas(
   f: Floor,
-  opts: {
-    clean?: boolean; furniture?: boolean; roomLabels?: boolean; maxPx?: number;
-    layers?: Layers; measures?: boolean;
-  } = {},
+  opts: FloorCanvasOpts = {},
 ): HTMLCanvasElement | null {
-  /* A measured print frames the building, not its annotation. Floorplanner's own
-     dimension chains sit metres off the walls, and letting them set the bounds
-     rendered the plan at half the scale it could be — which is why everything
-     came out small and the chains looked scattered. So keep only annotation that
-     sits against the building, and drop what is stranded out in the margin: the
-     chains this renderer draws now say the same thing, closer in. A measure line
-     the user placed themselves is next to what it measures, so it survives. */
-  let framed = f;
-  if (opts.measures) {
-    const bb = contentBBox({ ...f, dims: [], lines: [], notes: [], ref: null });
-    if (bb) {
-      const m = 130;                                    // cm of slack, about a wall's reach
-      const near = (p: { x: number; y: number }) =>
-        p.x >= bb.x0 - m && p.x <= bb.x1 + m && p.y >= bb.y0 - m && p.y <= bb.y1 + m;
-      framed = {
-        ...f,
-        dims: f.dims.filter(d => near(d.a) && near(d.b)),
-        lines: f.lines.filter(l => near(l.a) && near(l.b)),
-        /* the same rule catches the "© Zibber" boilerplate the .fml ships,
-           which sits a couple of metres under the plan and stretched the page */
-        notes: f.notes.filter(n => near(n)),
-      };
-    }
-  }
-  /* Frame on what will actually be drawn, and nothing else. A clean reference
-     hides the dimension chains and the notes (`layers.dims`/`notes` are false
-     below), so counting them here framed the picture around ink that is not in
-     it — and an imported plan's chains sprawl a metre past the walls, which made
-     the frame much wider than the building without making it taller. The plan
-     then sat in a letterbox, and the generator filled the spare bands with an
-     invented title block and captions of its own. Symmetric with `notes`, which
-     was already excluded for exactly this reason. */
-  const b = contentBBox({
-    ...framed,
-    notes: opts.clean ? [] : framed.notes,
-    dims: opts.clean ? [] : framed.dims,
-    ref: null,
-  });
-  if (!b) return null;
-  const maxPx = opts.maxPx ?? 3600;
-  const fit = (pad: number) => {
-    const wCm = b.x1 - b.x0 + pad * 2;
-    const hCm = b.y1 - b.y0 + pad * 2;
-    return { wCm, hCm, zoom: Math.max(0.15, Math.min(maxPx / Math.max(wCm, hCm), 6)) };
-  };
-
-  /* The dimension chains are drawn at a fixed pixel offset, so the margin has
-     to be a fixed number of pixels too — which means solving for it once the
-     scale is known, rather than picking a distance in centimetres. */
-  let pad = opts.clean ? 40 : 70;
-  if (opts.measures) pad = Math.max(pad, 88 / fit(pad).zoom);
-  const { wCm, hCm, zoom } = fit(pad);
+  const frameOpts = { maxPx: opts.maxPx ?? 3600, clean: opts.clean, measures: opts.measures };
+  const frame = planFrame(f, frameOpts);
+  if (!frame) return null;
+  /* The same floor the frame was measured from, or the picture carries ink the
+     margin was never sized for — stranded dimension chains, the .fml's "©
+     Zibber" note a couple of metres under the plan. `framedFloor` is where that
+     rule lives; passing `f` here is the one mistake that redraws every export. */
+  const framed = framedFloor(f, frameOpts);
 
   const cv = document.createElement('canvas');
-  cv.width = Math.round(wCm * zoom);
-  cv.height = Math.round(hCm * zoom);
+  cv.width = frame.width;
+  cv.height = frame.height;
   const ctx = cv.getContext('2d');
   if (!ctx) return null;
+
+  if (opts.pass) {
+    paintPass(ctx, {
+      floor: framed, frame, pass: opts.pass, furniture: opts.furniture !== false,
+    });
+    return cv;
+  }
 
   const layers: Layers = opts.layers ?? (opts.clean
     ? { rooms: true, areas: false, furn: opts.furniture !== false, dims: false, notes: false }
@@ -129,20 +112,88 @@ export function renderFloorCanvas(
 
   paint(ctx, {
     floor: framed,
-    view: { zoom, px: (-b.x0 + pad) * zoom, py: (-b.y0 + pad) * zoom },
+    view: frame.view,
     width: cv.width, height: cv.height,
     dpr: 1, layers, grid: false, live: false,
     roomLabels: opts.roomLabels !== false,
     vignette: false,
     measures: opts.measures,
-    /* The generator reference must carry no lettering at all — the prompt tells
-       the model there is none, and a label bleeds through into the render. */
-    objectLabels: !opts.clean,
+    /* A print keeps its labels; a clean reference drops them unless it is asked
+       for them. Naming every block on the picture is the only way to tell the
+       model which shape is the staircase and which is the kitchen run — the
+       prompt says where each object is, but the drawing is what it copies.
+       The cost is real and measured: lettering on the conditioning image bleeds
+       through into the render, which is why measurements default off. So the
+       prompt has to change with this flag, and it does — see `imgLabels` in
+       `prompt.ts`, which stops claiming the reference is unlettered and calls
+       the captions a key to be read rather than drawn. */
+    objectLabels: opts.objectLabels ?? !opts.clean,
     hatchFixtures: !opts.clean,
     /* the renderer's sizes are tuned for a screen canvas; a print is 3-4× that */
     textScale: Math.max(1, Math.min(cv.width, cv.height) / 900),
   });
   return cv;
+}
+
+/** The longest side of a conditioning image. The reference is not the print: at
+ *  3600 px it is 3.2 MP of base64 per image, and every control map beside it is
+ *  another one on the same request. */
+export const REFERENCE_MAX_PX = 1800;
+
+/** The one description of the conditioning frame, so the reference PNG and every
+ *  control map beside it are framed by the same call.
+ *
+ *  Two canvases built from hand-written option objects drifted the moment one of
+ *  them gained a toggle — and a control map a few pixels off the reference is a
+ *  map of a plan that was never sent. `measures` is in here even though no pass
+ *  draws a dimension chain: it changes the margin the frame solves for, so
+ *  leaving it out would frame the maps tighter than the picture they condition. */
+export function referenceOpts(
+  s: Pick<RenderSettings, 'furniture' | 'roomLabels' | 'imgMeasures' | 'imgLabels'>,
+): FloorCanvasOpts {
+  return {
+    clean: true,
+    furniture: s.furniture,
+    roomLabels: s.roomLabels,
+    measures: s.imgMeasures,
+    objectLabels: s.imgLabels,
+    maxPx: REFERENCE_MAX_PX,
+  };
+}
+
+export interface ControlCanvas { kind: ControlKind; canvas: HTMLCanvasElement }
+
+/** The control maps that will be sent with a render, in the order they are
+ *  attached — which is the order the prompt numbers them in, so this array and
+ *  `opts.controls` on `buildPrompt` have to be the same array. Not deduplicated
+ *  and not reordered here: a caller that asks for the same kind twice gets two
+ *  images and a brief that describes two, rather than a brief whose Image 3 is
+ *  the provider's Image 2.
+ *
+ *  A kind that produces nothing is dropped rather than sent blank, which only
+ *  happens on a floor with nothing on it — and that floor has no reference image
+ *  either, so there is no render to condition. */
+export function renderControlCanvases(
+  f: Floor, kinds: readonly ControlKind[], opts: FloorCanvasOpts = {},
+): ControlCanvas[] {
+  const out: ControlCanvas[] = [];
+  for (const kind of kinds) {
+    const canvas = renderFloorCanvas(f, { ...opts, pass: kind });
+    if (canvas) out.push({ kind, canvas });
+  }
+  return out;
+}
+
+/** A canvas as raw base64, no `data:` prefix — what `ControlImage.base64` and
+ *  BFL's `input_image_N` both want. The route strips a container off every image
+ *  it is sent as well, and belt and braces is right here: `ControlImage.base64`
+ *  says raw base64, the eval harness builds its images without going through the
+ *  route at all, and a container that reaches BFL comes back as a 422 with a
+ *  credit already spent. */
+export function pngBase64(canvas: HTMLCanvasElement): string {
+  const url = canvas.toDataURL('image/png');
+  const comma = url.indexOf(',');
+  return comma < 0 ? '' : url.slice(comma + 1);
 }
 
 export function exportPng() {

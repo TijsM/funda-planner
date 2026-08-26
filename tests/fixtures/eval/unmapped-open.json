@@ -1,0 +1,305 @@
+{
+ "schema": 2,
+ "id": "unmapped-open",
+ "name": "Bovenwoning, rooms not drawn",
+ "createdAt": 1787011200000,
+ "updatedAt": 1787011200000,
+ "source": null,
+ "floors": [
+  {
+   "id": "unmapped-open-f0",
+   "name": "Bovenwoning",
+   "level": 0,
+   "walls": [
+    {
+     "id": "unmapped-open-w0",
+     "a": {
+      "x": 0,
+      "y": 0
+     },
+     "b": {
+      "x": 1150,
+      "y": 0
+     },
+     "t": 20,
+     "openings": [
+      {
+       "id": "unmapped-open-o0",
+       "at": 0.3,
+       "type": "window",
+       "width": 180,
+       "flip": 0,
+       "side": 0
+      },
+      {
+       "id": "unmapped-open-o1",
+       "at": 0.7,
+       "type": "window",
+       "width": 180,
+       "flip": 0,
+       "side": 0
+      }
+     ]
+    },
+    {
+     "id": "unmapped-open-w1",
+     "a": {
+      "x": 1150,
+      "y": 0
+     },
+     "b": {
+      "x": 1150,
+      "y": 820
+     },
+     "t": 20,
+     "openings": []
+    },
+    {
+     "id": "unmapped-open-w2",
+     "a": {
+      "x": 1150,
+      "y": 820
+     },
+     "b": {
+      "x": 0,
+      "y": 820
+     },
+     "t": 20,
+     "openings": [
+      {
+       "id": "unmapped-open-o2",
+       "at": 0.5,
+       "type": "window",
+       "width": 200,
+       "flip": 0,
+       "side": 0
+      }
+     ]
+    },
+    {
+     "id": "unmapped-open-w3",
+     "a": {
+      "x": 0,
+      "y": 820
+     },
+     "b": {
+      "x": 0,
+      "y": 0
+     },
+     "t": 20,
+     "openings": [
+      {
+       "id": "unmapped-open-o3",
+       "at": 0.2,
+       "type": "door",
+       "width": 95,
+       "flip": 0,
+       "side": 0
+      }
+     ]
+    },
+    {
+     "id": "unmapped-open-w4",
+     "a": {
+      "x": 930,
+      "y": 620
+     },
+     "b": {
+      "x": 930,
+      "y": 820
+     },
+     "t": 10,
+     "openings": []
+    },
+    {
+     "id": "unmapped-open-w5",
+     "a": {
+      "x": 930,
+      "y": 620
+     },
+     "b": {
+      "x": 1150,
+      "y": 620
+     },
+     "t": 10,
+     "openings": [
+      {
+       "id": "unmapped-open-o4",
+       "at": 0.5,
+       "type": "door",
+       "width": 80,
+       "flip": 0,
+       "side": 0
+      }
+     ]
+    }
+   ],
+   "areas": [
+    {
+     "id": "unmapped-open-a0",
+     "poly": [
+      {
+       "x": 930,
+       "y": 620
+      },
+      {
+       "x": 1150,
+       "y": 620
+      },
+      {
+       "x": 1150,
+       "y": 820
+      },
+      {
+       "x": 930,
+       "y": 820
+      }
+     ],
+     "name": "Berging",
+     "color": "#E4DCC5",
+     "nx": 0,
+     "ny": 0,
+     "label": true
+    }
+   ],
+   "items": [
+    {
+     "id": "unmapped-open-i0",
+     "kind": "bed160",
+     "x": 200,
+     "y": 180,
+     "w": 160,
+     "h": 210,
+     "rot": 0,
+     "color": "#B08BB0",
+     "label": "Queen 160"
+    },
+    {
+     "id": "unmapped-open-i1",
+     "kind": "wardr",
+     "x": 420,
+     "y": 50,
+     "w": 160,
+     "h": 62,
+     "rot": 0,
+     "color": "#B08BB0",
+     "label": "Wardrobe"
+    },
+    {
+     "id": "unmapped-open-i2",
+     "kind": "sofa3",
+     "x": 780,
+     "y": 200,
+     "w": 225,
+     "h": 95,
+     "rot": 0,
+     "color": "#C7A44E",
+     "label": "Sofa 3-seat"
+    },
+    {
+     "id": "unmapped-open-i3",
+     "kind": "coffee",
+     "x": 780,
+     "y": 320,
+     "w": 110,
+     "h": 60,
+     "rot": 0,
+     "color": "#C7A44E",
+     "label": "Coffee table"
+    },
+    {
+     "id": "unmapped-open-i4",
+     "kind": "dt6",
+     "x": 500,
+     "y": 480,
+     "w": 180,
+     "h": 90,
+     "rot": 0,
+     "color": "#C7A44E",
+     "label": "Table 6p"
+    },
+    {
+     "id": "unmapped-open-i5",
+     "kind": "kcount",
+     "x": 120,
+     "y": 760,
+     "w": 120,
+     "h": 62,
+     "rot": 0,
+     "color": "#8FA9C4",
+     "label": "Counter run"
+    },
+    {
+     "id": "unmapped-open-i6",
+     "kind": "sink",
+     "x": 240,
+     "y": 760,
+     "w": 80,
+     "h": 60,
+     "rot": 0,
+     "color": "#8FA9C4",
+     "label": "Sink"
+    },
+    {
+     "id": "unmapped-open-i7",
+     "kind": "hob",
+     "x": 330,
+     "y": 760,
+     "w": 62,
+     "h": 60,
+     "rot": 0,
+     "color": "#8FA9C4",
+     "label": "Hob"
+    },
+    {
+     "id": "unmapped-open-i8",
+     "kind": "fridge",
+     "x": 420,
+     "y": 760,
+     "w": 70,
+     "h": 70,
+     "rot": 0,
+     "color": "#8FA9C4",
+     "label": "Fridge"
+    },
+    {
+     "id": "unmapped-open-i9",
+     "kind": "bath",
+     "x": 950,
+     "y": 100,
+     "w": 172,
+     "h": 76,
+     "rot": 0,
+     "color": "#6FA8B5",
+     "label": "Bathtub"
+    },
+    {
+     "id": "unmapped-open-i10",
+     "kind": "toilet",
+     "x": 1090,
+     "y": 300,
+     "w": 40,
+     "h": 68,
+     "rot": 0,
+     "color": "#6FA8B5",
+     "label": "Toilet"
+    },
+    {
+     "id": "unmapped-open-i11",
+     "kind": "desk",
+     "x": 660,
+     "y": 60,
+     "w": 140,
+     "h": 70,
+     "rot": 0,
+     "color": "#B08BB0",
+     "label": "Desk"
+    }
+   ],
+   "notes": [],
+   "dims": [],
+   "lines": [],
+   "ref": null
+  }
+ ]
+}

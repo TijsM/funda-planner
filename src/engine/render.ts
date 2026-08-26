@@ -1,8 +1,9 @@
 import type {
-  Draft, Floor, Handle, Hit, Layers, Marquee, Pt, SelObj, View,
+  Draft, Floor, Handle, Hit, Layers, Marquee, Pt, SelObj, Shape, View,
 } from './types';
 import { bboxOf, clamp, dist, fmtM2, polyArea, polyCentroid, unitNormal } from './geometry';
 import { CAT_BY_KIND, rr, toneFor } from './catalog';
+import { drawShape } from './custom';
 import { labelOf, shellBBox } from './model';
 import {
   ACC, CYA, GHOST, PAPER, WALLC, gridStep, hexA, openingRect, pathPoly, wallQuad,
@@ -29,7 +30,10 @@ export interface PaintInput {
   handles?: Handle[];
   hover?: Hit | null;
   draft?: Draft | null;
-  place?: { kind: string; x: number; y: number } | null;
+  /** The object following the cursor. It carries its own `shape` for a custom
+   *  object: the drawing lives on the project and this renderer is handed a floor,
+   *  so a lookup here would mean threading the whole document in for a ghost. */
+  place?: { kind: string; x: number; y: number; shape?: Shape } | null;
   marquee?: Marquee | null;
   snapHint?: Pt | null;
   /** room names — off for the clean image-generator reference */
@@ -279,6 +283,11 @@ export function paint(g: Ctx, input: PaintInput): void {
       g.lineWidth = LW(1.4); g.lineJoin = 'round'; g.lineCap = 'butt';
       if (c) {
         c.draw(g, i.w, i.h, u);
+      } else if (i.shape) {
+        /* Ahead of the fitted-block branch below: an object someone drew is not
+           an anonymous imported footprint, and hatching it would file it as
+           joinery in every render brief that reads this drawing. */
+        drawShape(g, i.shape, i.w, i.h);
       } else if (!hatchFixtures) {
         /* a plain solid block: unmistakably an object with a footprint */
         rr(g, -i.w / 2, -i.h / 2, i.w, i.h, 2); g.fill(); g.stroke();
@@ -591,16 +600,18 @@ export function paint(g: Ctx, input: PaintInput): void {
 
   if (place) {
     const c = CAT_BY_KIND[place.kind];
-    if (c) {
+    const sh = place.shape;
+    if (c || sh) {
       world(); g.save();
       g.globalAlpha = 0.5;
       g.translate(place.x, place.y);
       const col = toneFor(c);
       g.fillStyle = hexA(col, 0.3); g.strokeStyle = hexA(col, 0.95);
       g.lineWidth = LW(1.4); g.lineJoin = 'round';
-      c.draw(g, c.w, c.h, u);
+      const [pw, ph] = c ? [c.w, c.h] : [sh!.w, sh!.h];
+      if (c) c.draw(g, pw, ph, u); else drawShape(g, sh!, pw, ph);
       g.restore();
-      mono(`${c.name}  ${c.w}×${c.h}`, place.x, place.y - c.h / 2 - 13 * u, 10, ACC);
+      mono(`${c ? c.name : sh!.name}  ${pw}×${ph}`, place.x, place.y - ph / 2 - 13 * u, 10, ACC);
     }
   }
 

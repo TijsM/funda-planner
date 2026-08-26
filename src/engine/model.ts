@@ -1,4 +1,4 @@
-import type { Area, Floor, Item, Project, Pt, SelObj, SelRef, Wall } from './types';
+import type { Area, Floor, Item, Project, Pt, SelObj, SelRef, Shape, Wall } from './types';
 import { bboxOf, polyArea, R2, uid } from './geometry';
 import { CAT_BY_KIND, GROUP_TONE, ROOM_SWATCHES, toneFor } from './catalog';
 
@@ -43,7 +43,11 @@ export function setLabel(o: Item, v: string): void {
 /** what actually gets drawn under an object */
 export function labelOf(i: Item): string {
   const c = CAT_BY_KIND[i.kind];
-  return i.label || (!i.noLabel && c ? c.name : '');
+  /* A custom object's name lives on its own drawing, because there is no
+     catalogue row to fall back to — and an object a person named themselves
+     going unlabelled is the one case where the fallback matters most. */
+  const named = c?.name ?? i.shape?.name;
+  return i.label || (!i.noLabel && named ? named : '');
 }
 
 /** The description as the prompt should see it: newlines and runs of space
@@ -55,6 +59,17 @@ export const descOf = (o: { desc?: string }): string =>
  *  unlike a label, a description has no default to fall back to. */
 export function setDesc(o: Item | Area, v: string): void {
   if (String(v).trim()) o.desc = v; else delete o.desc;
+}
+
+/** Places a shape a person drew. The drawing is copied onto the item rather than
+ *  referenced — see `Item.shape` for why — and the tone is the one the catalogue
+ *  uses for anything it has no group for, so a custom object reads as an object
+ *  rather than as a member of some group it was never put in. */
+export function makeCustomItem(s: Shape, at: Pt): Item {
+  return {
+    id: uid(), kind: s.id, x: at.x, y: at.y, w: s.w, h: s.h, rot: 0,
+    color: toneFor(undefined), label: s.name, shape: { ...s },
+  };
 }
 
 export function makeItem(kind: string, at: Pt): Item {

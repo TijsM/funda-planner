@@ -1,4 +1,5 @@
 import type { RenderRecord } from '@shell/renders';
+import { modelLabelOf } from './providers';
 import { RENDER_BUCKET, renderThumbPath, type RenderRow } from './schema';
 import { client, type Db } from './supabase';
 
@@ -108,7 +109,11 @@ const recordOf = (r: Row, projectId: string, urls: Map<string, string>): RenderR
     prompt: r.prompt,
     settings: r.settings,
     seed: r.seed,
-    model: r.model,
+    /* The row stores the provider ID — the render route writes it there because
+       it is the only string that can poll the job again — and a record wants the
+       label. Without this the filmstrip read `flux2-max` for a render made in the
+       account and `FLUX.2 [max]` for the same one made locally. */
+    model: modelLabelOf(r.model),
     status: r.status,
     ...(r.error ? { error: r.error } : {}),
     /* Never the bytes. `status === 'ready'` is what says this one succeeded. */

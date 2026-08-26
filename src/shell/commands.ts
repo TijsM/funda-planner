@@ -1,8 +1,10 @@
-import type { Area, Dim, Floor, Item, Line, Note, Pt, SelRef, Wall } from '@engine/types';
+import type { Area, Dim, Floor, Item, Line, Note, Pt, SelRef, Shape, Wall } from '@engine/types';
 import { R2, bboxOf, dist, rotPt, uid } from '@engine/geometry';
+import { clipOfSelection, cloneFloor, copyName, insertFloor, pasteObjects } from '@engine/io/clip';
 import { ROOM_SWATCHES, CAT_BY_KIND, toneFor } from '@engine/catalog';
+import { isCustomKind } from '@engine/custom';
 import {
-  addOpening, eachSelPoint, findOpening, makeItem, newArea, newFloor, resolveSel,
+  addOpening, eachSelPoint, findOpening, makeCustomItem, makeItem, newArea, newFloor, resolveSel,
 } from '@engine/model';
 import { ed } from '@state/store';
 
@@ -33,31 +35,21 @@ export function deleteSelection() {
   s.touch();
 }
 
+/** ⌘D, and the Duplicate button on every toolbar.
+ *
+ *  It is a paste of the selection with no pointer position, so a duplicate and a
+ *  paste cannot drift apart — including for an opening, which has no position of
+ *  its own and gets stepped along its wall instead. */
 export function duplicateSelection() {
   const s = ed();
   const f = s.floor();
   if (!f || !s.sel.length) return;
+  const clip = clipOfSelection(f, s.sel);
+  if (!clip) return;
   s.pushUndo();
-  const off = 25;
-  const out: SelRef[] = [];
-  resolveSel(f, s.sel).forEach(o => {
-    if (o.t === 'opening') return;
-    const c = JSON.parse(JSON.stringify(o.o)) as { id: string };
-    c.id = uid();
-    if (o.t === 'wall' || o.t === 'dim' || o.t === 'line') {
-      const w = c as unknown as Wall;
-      w.a.x += off; w.a.y += off; w.b.x += off; w.b.y += off;
-      if (o.t === 'wall' && w.openings) w.openings.forEach(op => { op.id = uid(); });
-    } else if (o.t === 'area') {
-      (c as unknown as Area).poly.forEach(p => { p.x += off; p.y += off; });
-    } else {
-      const i = c as unknown as Pt;
-      i.x += off; i.y += off;
-    }
-    bagOf(f)[o.t].push(c);
-    out.push({ t: o.t, id: c.id });
-  });
-  s.setSel(out);
+  const r = pasteObjects(f, clip);
+  if (!r.sel.length) { s.dropUndo(); return; }
+  s.setSel(r.sel);
   s.touch();
 }
 
@@ -107,12 +99,41 @@ export function rotateSelection(deg = 90) {
 export function placeCatalogItem(kind: string, at: Pt, keepArmed: boolean) {
   const s = ed();
   const f = s.floor();
-  if (!f || !CAT_BY_KIND[kind]) return;
+  if (!f) return;
+  /* A custom kind is an id, not a catalogue row, so the tray's one arming path
+     has to fork here rather than at every call site — the tile does not know
+     which sort of thing it is holding and should not have to. */
+  const shape = isCustomKind(kind)
+    ? (s.project?.shapes ?? []).find(x => x.id === kind)
+    : null;
+  if (!shape && !CAT_BY_KIND[kind]) return;
   s.pushUndo();
-  const it = makeItem(kind, at);
+  const it = shape ? makeCustomItem(shape, at) : makeItem(kind, at);
   f.items.push(it);
   if (!keepArmed) s.patch({ place: null });
   s.setSel([{ t: 'item', id: it.id }]);
+  s.touch();
+}
+
+/** Files a drawing in the plan and arms it, so the click after "Create" places
+ *  it — the whole point of drawing one was to put it somewhere. */
+export function addShape(shape: Shape) {
+  const s = ed();
+  if (!s.project) return;
+  s.pushUndo();
+  s.project.shapes = [...(s.project.shapes ?? []), shape];
+  s.patch({ place: shape.id, tool: 'select' });
+  s.touch();
+}
+
+/** Takes a drawing out of the tray. Objects already placed keep theirs — they
+ *  carry their own copy, which is the reason they carry it. */
+export function removeShape(id: string) {
+  const s = ed();
+  if (!s.project) return;
+  s.pushUndo();
+  s.project.shapes = (s.project.shapes ?? []).filter(x => x.id !== id);
+  if (s.place === id) s.patch({ place: null });
   s.touch();
 }
 
@@ -177,6 +198,23 @@ export function addFloor() {
   s.project.floors.push(newFloor(`Level ${lv}`, lv));
   s.patch({ floorIndex: s.project.floors.length - 1, sel: [] });
   s.touch();
+}
+
+/** A floor and everything on it, copied in directly above the original.
+ *
+ *  Every id is renewed — see `cloneFloor` — so the two floors share nothing, and
+ *  the levels above shuffle up to keep the stack in order. */
+export function duplicateFloor(i: number) {
+  const s = ed();
+  if (!s.project) return;
+  const src = s.project.floors[i];
+  if (!src) return;
+  s.pushUndo();
+  const f = cloneFloor(src, copyName(src.name, s.project.floors.map(x => x.name)));
+  const at = insertFloor(s.project.floors, f, i);
+  s.patch({ floorIndex: at, sel: [], draft: null });
+  s.touch();
+  s.toast(`Duplicated as “${f.name}”.`);
 }
 
 export function removeFloor(i: number) {

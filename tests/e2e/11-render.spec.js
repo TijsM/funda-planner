@@ -90,8 +90,10 @@ test.describe('generating a render', () => {
     expect(body.height % 16).toBe(0);
     expect(body.width * body.height).toBeLessThanOrEqual(1_000_000);
     expect(Math.max(body.width, body.height)).toBeLessThan(1800);
-    /* the footer states the same numbers the request used */
-    await expect(page.locator('#aiSession')).toContainText(`${body.width}×${body.height}`);
+    /* The footer states the same numbers the request used — in `#aiCost`, beside
+       the button that spends the money, because the price is a function of the
+       size. `#aiSession` is the per-tab counter and nothing else now. */
+    await expect(page.locator('#aiCost')).toContainText(`${body.width}×${body.height}`);
 
     /* Renders are IndexedDB, not the document — so they outlive a reload while
        the session counter, which is a per-tab thing, does not. Reloaded the way

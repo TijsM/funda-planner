@@ -7,7 +7,9 @@ import {
   rotPt, serializeProject, setLabel, setDesc, descOf, labelOf, makeItem, newArea, bearing,
   shellBBox, snapAngle, snapPoint, axisLock,
   fitTo, zoomAt, toScreen, toWorld, handlesFor, cursorForHandle, hitTest, resolveSel, placeOf,
+  STYLE_PRESETS, expandStyle, headWords,
 } from '@engine/index';
+import { SEATS } from '@engine/catalog';
 import type { Fml } from '@engine/io/funda';
 import type { Item, Layers, View } from '@engine/types';
 
@@ -281,7 +283,29 @@ describe('catalogue', () => {
   it('finds every round table, not just the ones named like one', () => {
     const kinds = finds('round table').map(i => i.kind);
     expect(kinds).toContain('dtr');
+    expect(kinds).toContain('dtr4');
     expect(kinds).toContain('ktable');
+  });
+
+  /* A round four-seater existed only under Kitchen, where nobody laying out a
+     dining room goes looking for it — and the Dining group's round series jumped
+     straight from nothing to six. */
+  it('has a round four-seater in the dining group, not only in the kitchen', () => {
+    const dining = CATALOG.find(g => g.group === 'Dining')!.items;
+    const round4 = dining.filter(i => /round/i.test(`${i.name} ${i.alt ?? ''}`) && SEATS[i.kind] === 4);
+    expect(round4.map(i => i.kind)).toEqual(['dtr4']);
+    /* square-on, or the circle glyph draws an ellipse */
+    expect(round4[0].w).toBe(round4[0].h);
+  });
+
+  /* Every one of these floors has a hall cupboard and none of them could draw
+     one: the Wardrobe is the bedroom's and 62 cm deep for hangers, and the Tall
+     cabinet is a kitchen unit. */
+  it('has a cupboard, by every word a person would call it', () => {
+    for (const q of ['cupboard', 'kast', 'storage', 'closet']) {
+      expect(finds(q).map(i => i.kind), q).toContain('cupbrd');
+    }
+    expect(CAT_BY_KIND.cupbrd.h).toBeLessThan(CAT_BY_KIND.wardr.h);
   });
 
   it('has a round table you can put in a kitchen', () => {
@@ -299,8 +323,11 @@ describe('image-generator prompt', () => {
   const base = { view: 'top' as const, furniture: true, dimensions: true };
 
   it('is written from the real geometry', () => {
-    const out = buildPrompt(p, floor, base);
-    expect(out).toContain('Pieter Kleijnstraat 19');
+    const out = buildPrompt(floor, base);
+    /* the street address steers nothing in an image and pulls the model towards
+       whatever real building it half-remembers, so it is not in the brief */
+    expect(out).not.toContain('Pieter Kleijnstraat');
+    expect(out).toContain('Begane Grond');
     expect(out).toContain('Woonkamer');
     expect(out).toMatch(/26\.\d m²/);
     expect(out).toMatch(/North is at the top/);
@@ -308,28 +335,175 @@ describe('image-generator prompt', () => {
     expect(out).toMatch(/Do not add, remove or rearrange walls/);
   });
 
+  /* Both used to be the last two lines of a 27-line brief, read after every room
+     had already been placed — and the renders came back as tilted dollhouses
+     with drifting far-end geometry. */
+  it('states the camera and the reference image before any geometry', () => {
+    const out = buildPrompt(floor, base);
+    expect(out.indexOf('CAMERA AND OUTPUT')).toBeLessThan(out.indexOf('ROOMS'));
+    expect(out.indexOf('REFERENCE')).toBeLessThan(out.indexOf('ROOMS'));
+    /* style is the only block allowed to move, so it is read last */
+    const styled = buildPrompt(floor, { ...base, style: 'Japandi' });
+    expect(styled.indexOf('LOCKED')).toBeLessThan(styled.indexOf('STYLE'));
+    expect(styled.trimEnd().endsWith('the LOCKED block still wins.')).toBe(true);
+  });
+
+  /* Front-loading the camera was only half the fix: it was still 120 words of
+     it, and BFL's guide says attention falls off with word order and puts the
+     useful window at 30-80 words. The clauses that mattered were sitting behind
+     clauses that only restated them. */
+  it('keeps the block before the LOCKED tables inside the documented word window', () => {
+    for (const view of ['top', 'eye', 'iso', 'sketch'] as const) {
+      const n = headWords(buildPrompt(floor, { ...base, view }));
+      expect(n, view).toBeLessThanOrEqual(80);
+      expect(n, view).toBeGreaterThanOrEqual(30);
+    }
+    /* the tables below the line are data and stay as long as the plan needs */
+    expect(buildPrompt(floor, base).split(/\s+/).length).toBeGreaterThan(120);
+  });
+
+  /* Every attachment costs words at the most expensive end of the brief, so an
+     extra one has to be a sentence, not a paragraph. */
+  it('adds one short sentence per attached map and no more', () => {
+    const plain = headWords(buildPrompt(floor, base));
+    const labelled = headWords(buildPrompt(floor, { ...base, imgLabels: true }));
+    const one = headWords(buildPrompt(floor, { ...base, controls: ['line'] }));
+    const two = headWords(buildPrompt(floor, { ...base, controls: ['line', 'depth'] }));
+    expect(labelled - plain).toBeLessThanOrEqual(30);
+    /* the first map pays for the "keep the arrangement" sentence as well */
+    expect(one - plain).toBeLessThanOrEqual(35);
+    expect(two - one).toBeLessThanOrEqual(20);
+  });
+
+  it('makes the top-down camera a constraint rather than a hint', () => {
+    const out = buildPrompt(floor, base);
+    expect(out).toMatch(/strict orthographic/i);
+    expect(out).toMatch(/zero perspective/i);
+    expect(out).not.toMatch(/orthographic-looking/);
+    /* the isometric view is the one that genuinely wants the tilt */
+    const iso = buildPrompt(floor, { ...base, view: 'iso' });
+    expect(iso).toMatch(/45°/);
+    expect(iso).not.toMatch(/zero perspective/i);
+  });
+
   it('each viewpoint produces a different brief', () => {
-    const seen = (['top', 'eye', 'iso', 'sketch'] as const).map(view => buildPrompt(p, floor, { ...base, view }));
+    const seen = (['top', 'eye', 'iso', 'sketch'] as const).map(view => buildPrompt(floor, { ...base, view }));
     expect(new Set(seen).size).toBe(4);
     expect(seen[1]).toMatch(/eye level|24 mm/i);
     expect(seen[3]).toMatch(/watercolour/i);
   });
 
+  /* An unannounced map is worse than no map: a depth ramp handed over in
+     silence comes back painted onto the floor as a grey gradient. The lead
+     sentence is BFL's own published phrasing for holding a layout. */
+  it('names every control map it sends, numbered from image 2', () => {
+    const out = buildPrompt(floor, { ...base, controls: ['line', 'depth', 'seg'] });
+    expect(out).toContain('Keep the exact spatial arrangement from image 1');
+    expect(out).toMatch(/Image 2 is a line drawing/);
+    expect(out).toMatch(/Image 3 is a depth map/);
+    expect(out).toMatch(/Image 4 is a segmentation map/);
+    /* stated before any geometry, where the word order still buys attention */
+    expect(out.indexOf('Image 2')).toBeLessThan(out.indexOf('LOCKED'));
+    /* and each one says it is a control, not something to draw */
+    expect(out.match(/Do not render it\./g)).toHaveLength(3);
+    /* the vendor's sentence replaces our own "match it exactly" rather than
+       joining it — saying the same thing twice is two lines of the opening
+       budget for one instruction — but the walls rule is not in theirs */
+    expect(out).not.toContain('Match image 1 exactly');
+    expect(out).toContain('Do not add, remove or rearrange walls.');
+  });
+
+  /* A change mask says the opposite thing depending on which way round the
+     polarity is stated, and the expensive way round is the one that repaints
+     what had to be preserved. paintPass draws white where a re-render is
+     allowed, so that is what the sentence has to claim. */
+  it('states the change mask the same way round as the mask is painted', () => {
+    const out = buildPrompt(floor, { ...base, controls: ['change'] });
+    expect(out).toMatch(/Image 2 is a change mask: white may be re-rendered, black must come through unchanged/);
+  });
+
+  /* The whole option has to be free for the provider that takes no maps: FLUX.2
+     accepts none, and today's users must not get a different brief because the
+     code learned a new word. */
+  it('is byte-identical to the old brief when no map is attached', () => {
+    const plain = buildPrompt(floor, base);
+    expect(buildPrompt(floor, { ...base, controls: [] })).toBe(plain);
+    expect(buildPrompt(floor, { ...base, controls: undefined })).toBe(plain);
+    expect(plain).not.toContain('Keep the exact spatial arrangement');
+  });
+
   it('can be scoped to one room', () => {
     const facts = planFacts(floor);
     const woon = facts.rooms.find(r => r.name === 'Woonkamer')!;
-    const one = buildPrompt(p, floor, { ...base, room: woon.a.id });
+    const one = buildPrompt(floor, { ...base, room: woon.a.id });
     expect(one).toContain('Woonkamer');
     expect(one).not.toContain('Keuken');
+    /* The walls rule was a closing line that ran on every brief until the
+       front-loading moved the reference block to the top and left the
+       room-scoped branch without one — and a room-scoped brief is the one most
+       likely to grow a wall, because the reference shows three rooms the model
+       has just been told not to draw. It still has to fit the word window. */
+    expect(one).toContain('Do not add, remove or rearrange walls.');
+    expect(headWords(one)).toBeLessThanOrEqual(80);
   });
 
   it('drops measurements and furniture on request', () => {
-    const out = buildPrompt(p, floor, { ...base, dimensions: false, furniture: false });
+    const out = buildPrompt(floor, { ...base, dimensions: false, furniture: false });
     expect(out).not.toMatch(/m²/);
   });
 
   it('folds in a free-text style', () => {
-    expect(buildPrompt(p, floor, { ...base, style: 'warm oak' })).toContain('warm oak');
+    expect(buildPrompt(floor, { ...base, style: 'warm oak' })).toContain('warm oak');
+  });
+
+  /* A style is two words in a box; the image model needs materials, colours and
+     light. The expansion says what the word means without taking the words the
+     person actually typed away from them. */
+  /* Our own lettering comes back drawn into the render — that is why the
+     measurement captions were turned off. The labels earn their place anyway, so
+     the brief has to stop claiming the reference is unlettered and say what the
+     captions are for instead. */
+  it('calls the reference annotated only when the labels are actually on it', () => {
+    const on = buildPrompt(floor, { ...base, imgLabels: true });
+    expect(on).toMatch(/reference image is annotated/i);
+    expect(on).toMatch(/draw none of the lettering/i);
+    /* was "no text, labels or dimensions anywhere in the render" — the same ban
+       in fewer words, because the opening block is now on a word budget */
+    expect(on).toMatch(/no text or labels anywhere in the render/i);
+
+    const off = buildPrompt(floor, base);
+    expect(off).not.toMatch(/annotated/i);
+    expect(off).not.toMatch(/lettering/i);
+  });
+
+  it('expands a style it recognises, and keeps the typed words on top', () => {
+    const out = buildPrompt(floor, { ...base, style: 'Scandinavian, matte black accents' });
+    expect(out).toContain('Scandinavian, matte black accents.');
+    expect(out).toContain('Scandinavian here means:');
+    expect(out).toMatch(/pale oak/);
+    expect(out).toMatch(/the words above win/);
+  });
+
+  it('passes free text through untouched when it names no style it knows', () => {
+    const out = buildPrompt(floor, { ...base, style: 'like my grandmother\'s house' });
+    expect(out).toContain("like my grandmother's house.");
+    expect(out).not.toContain('here means:');
+  });
+
+  it('matches a style label on whole words only', () => {
+    expect(expandStyle('Art deco')?.label).toBe('Art deco');
+    expect(expandStyle('mid-century modern')?.label).toBe('Mid-century modern');
+    expect(expandStyle('boho')?.label).toBe('Bohemian');
+    /* "decorative plasterwork" is not Art deco */
+    expect(expandStyle('decorative plasterwork')).toBe(null);
+    expect(expandStyle('')).toBe(null);
+  });
+
+  it('every preset expands into something concrete', () => {
+    for (const p of STYLE_PRESETS) {
+      expect(p.tokens.length, p.label).toBeGreaterThan(40);
+      expect(expandStyle(p.label)?.label, p.label).toBe(p.label);
+    }
   });
 });
 
@@ -388,7 +562,7 @@ describe('openings report the wall they are in, not their own octant', () => {
         openings: [{ id: `o${i}`, at: 0.5, type: 'window', width: 100, flip: 0, side: 0 }] });
     }
     expect(planFacts(f).windowSides.length).toBeGreaterThanOrEqual(5);
-    const out = buildPrompt(p, f, { view: 'top', furniture: false, dimensions: false });
+    const out = buildPrompt(f, { view: 'top', furniture: false, dimensions: false });
     expect(out).toMatch(/nearly every elevation/i);
     expect(out).not.toMatch(/Windows on the .*and.*sides/);
   });
@@ -402,8 +576,8 @@ describe('the area headline stays coherent with the footprint', () => {
     f.areas[0].poly = [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }];
     expect(planFacts(f).mapped).toBe(false);
 
-    const out = buildPrompt(p, f, { view: 'top', furniture: false, dimensions: true });
-    const subject = out.split('\n')[3];
+    const out = buildPrompt(f, { view: 'top', furniture: false, dimensions: true });
+    const subject = out.split('\n').find(l => l.startsWith('"'))!;
     expect(subject).toContain('overall footprint 8.0 × 10.0 m');
     expect(subject).not.toMatch(/m² over/);          // no 1.0 m² inside an 80 m² shell
   });
@@ -413,15 +587,18 @@ describe('the area headline stays coherent with the footprint', () => {
     const f = p.floors[0];
     f.areas[0].name = 'Woonkamer';
     expect(planFacts(f).mapped).toBe(true);
-    const subject = buildPrompt(p, f, { view: 'top', furniture: false, dimensions: true })
-      .split('\n')[3];
+    const subject = buildPrompt(f, { view: 'top', furniture: false, dimensions: true })
+      .split('\n').find(l => l.startsWith('"'))!;
     expect(subject).toMatch(/80\.0 m² over 1 named room, overall footprint 8\.0 × 10\.0 m/);
   });
 });
 
-describe('objects say where they are', () => {
-  /* A comma-separated bag of nouns leaves placement to the model, and it moves
-     things: a fireplace drawn on the left wall came back mid-floor. */
+describe('placeOf puts a position into words', () => {
+  /* placeOf no longer feeds the brief — position through prose measures 0.41
+     quadrant F1 (arXiv:2507.08039) against the same fact drawn pixel-exact on
+     the reference, so the OBJECTS table dropped its Position column. The
+     function stays, and stays pinned down here: the eval harness reports where
+     an object actually landed, and a person reads that report. */
   const b = { x0: 0, y0: 0, x1: 600, y1: 1200 };
   const at = (x: number, y: number) => placeOf({ ...makeItem('chair', { x, y }) }, b);
 
@@ -455,13 +632,58 @@ describe('objects say where they are', () => {
     };
     add(900, 'gamma'); add(200, 'alpha'); add(550, 'beta');
 
-    const out = buildPrompt(p, f, { view: 'top', furniture: true, dimensions: false });
+    const out = buildPrompt(f, { view: 'top', furniture: true, dimensions: false });
     expect(planFacts(f).loose.map(i => labelOf(i))).toEqual(['alpha', 'beta', 'gamma']);
     expect(out.indexOf('alpha')).toBeLessThan(out.indexOf('beta'));
     expect(out.indexOf('beta')).toBeLessThan(out.indexOf('gamma'));
-    /* one line each, with a position — not a comma list */
+    /* one row each — not a comma list. The row no longer says where the object
+       is; the drawing does. The reading order still matters, because word order
+       is what the model weighs (BFL's guide) and a plan reads top to bottom. */
     expect(out).not.toMatch(/Elsewhere on the floor/);
     expect(out).toMatch(/OBJECTS/);
+  });
+
+  /* Both channels used to describe the same sofa, and the words are the weaker
+     one: the OBJECTS table said "against the left wall, upper" while the pixels
+     said it exactly, and a model that has to reconcile the two moves it. */
+  it('leaves the position of an object to the drawing', () => {
+    const p = blankProject('x', false);
+    const f = p.floors[0];
+    const sofa = makeItem('sofa3', { x: 40, y: 200 });
+    setLabel(sofa, 'sofa');
+    f.items.push(sofa);
+
+    const said = placeOf(sofa, shellBBox(f)!);
+    expect(said).toBe('against the left wall, upper');   // placeOf still works
+
+    const out = buildPrompt(f, { view: 'top', furniture: true, dimensions: true });
+    const row = out.split('\n').find(l => l.startsWith('Woonkamer | sofa |') || / \| sofa \| /.test(l))!;
+    expect(row).toBeTruthy();
+    expect(out).not.toContain(said);
+    expect(out).not.toMatch(/^Room \| Object \| Size \| Position/m);
+    expect(out).not.toMatch(/\| Position \|/);
+  });
+
+  /* A size in the text is an invitation to letter the render with it — the same
+     way our own dimension captions came back drawn on the floor — and the
+     drawing already carries the size to the pixel. So a measurement appears only
+     when someone asked for measurements; the OBJECTS table loses the column
+     entirely rather than emitting an empty one. */
+  it('emits no size at all unless measurements were asked for', () => {
+    const p = blankProject('x', false);
+    const f = p.floors[0];
+    const sofa = makeItem('sofa3', { x: 400, y: 500 });
+    setLabel(sofa, 'sofa');
+    f.items.push(sofa);
+
+    const off = buildPrompt(f, { view: 'top', furniture: true, dimensions: false });
+    expect(off).toMatch(/^Room \| Object \| Notes$/m);
+    expect(off).not.toMatch(/\bcm\b/);
+    expect(off).not.toMatch(/\| Size \|/);
+
+    const on = buildPrompt(f, { view: 'top', furniture: true, dimensions: true });
+    expect(on).toMatch(/^Room \| Object \| Size \| Notes$/m);
+    expect(on).toMatch(/\| \d+×\d+ cm \|/);
   });
 
   it('tells the model a staircase is a staircase', () => {
@@ -470,13 +692,13 @@ describe('objects say where they are', () => {
     const i = makeItem('stairU', { x: 400, y: 500 });
     setLabel(i, 'stairs up');
     f.items.push(i);
-    const out = buildPrompt(p, f, { view: 'top', furniture: true, dimensions: true });
+    const out = buildPrompt(f, { view: 'top', furniture: true, dimensions: true });
     expect(out).toMatch(/staircase goes up to the floor above/);
     expect(out).toMatch(/not as furniture and not as a corridor/);
 
     /* and it says so even when the stair sits inside a named room */
     f.areas[0].name = 'Hal';
-    expect(buildPrompt(p, f, { view: 'top', furniture: true, dimensions: true }))
+    expect(buildPrompt(f, { view: 'top', furniture: true, dimensions: true }))
       .toMatch(/not as furniture and not as a corridor/);
   });
 });
@@ -511,11 +733,11 @@ describe('object descriptions', () => {
     const { q, f } = plan();
     const woon = f.areas.find(a => a.name === 'Woonkamer')!;
     setDesc(woon, 'wide oak floorboards, low winter light');
-    const out = buildPrompt(q, f, base);
-    const line = out.split('\n').find(l => l.startsWith('- Woonkamer'))!;
+    const out = buildPrompt(f, base);
+    const line = out.split('\n').find(l => l.startsWith('Woonkamer |'))!;
     expect(line).toContain('wide oak floorboards, low winter light');
-    /* ends as its own sentence, so it cannot run into the generated prose */
-    expect(line).toMatch(/low winter light\.( |$)/);
+    /* last column, so nothing generated can run on after it */
+    expect(line).toMatch(/low winter light(;|$)/);
   });
 
   /* every item on this floor is a fitted one imported from the listing, so a
@@ -534,31 +756,34 @@ describe('object descriptions', () => {
     const { sofa } = furnish(f);
     setDesc(sofa, 'dark green velvet, mid-century, low back');
 
-    const out = buildPrompt(q, f, base);
-    const line = out.split('\n').find(l => l.startsWith('- Woonkamer'))!;
-    expect(line).toMatch(/sofa 3-seat \(\d+×\d+ cm\) — dark green velvet, mid-century, low back/);
-    /* a described list carries commas, so its entries separate on semicolons */
-    expect(line).toContain('; ');
-    expect(out).toMatch(/deliberate instructions/i);
+    const out = buildPrompt(f, base);
+    const line = out.split('\n').find(l => l.includes('| sofa 3-seat |'))!;
+    /* Room | Object | Size | Notes, in that order and nothing else. Position was
+       the fifth column until the geometry moved into the conditioning image. */
+    expect(line).toMatch(/^Woonkamer \| sofa 3-seat \| \d+×\d+ cm \| dark green velvet, mid-century, low back$/);
+    /* the header says the Notes column is an instruction, so it is not restated */
+    expect(out).not.toMatch(/deliberate instructions/i);
   });
 
   it('leaves the brief untouched when nothing is described', () => {
     const { q, f } = plan();
     furnish(f);
-    const out = buildPrompt(q, f, base);
-    expect(out).not.toMatch(/deliberate instructions/i);
-    const list = out.split('\n').find(l => l.startsWith('- Woonkamer'))!.split('Contains: ')[1];
-    expect(list).toMatch(/, /);        // still comma-joined
-    expect(list).not.toContain(';');
+    const out = buildPrompt(f, base);
+    const rows = out.split('\n').filter(l => /^Woonkamer \| (sofa 3-seat|rug) \|/.test(l));
+    expect(rows).toHaveLength(2);
+    /* an undescribed object still gets its own row — the Notes cell is simply
+       empty. Four columns since Position left: Room | Object | Size | Notes. */
+    for (const r of rows) expect(r.split(' | ')).toHaveLength(4);
+    expect(rows.every(r => r.endsWith('| —'))).toBe(true);
   });
 
   it('collapses newlines a user pasted in', () => {
     const { q, f } = plan();
     const woon = f.areas.find(a => a.name === 'Woonkamer')!;
     setDesc(woon, 'oak floors\n\nbrass  fittings\n');
-    const out = buildPrompt(q, f, base);
+    const out = buildPrompt(f, base);
     expect(out).toContain('oak floors brass fittings');
-    expect(out.split('\n').filter(l => l.startsWith('- Woonkamer'))).toHaveLength(1);
+    expect(out.split('\n').filter(l => l.startsWith('Woonkamer |'))).toHaveLength(1);
   });
 
   it('surfaces a fitted object once it has a name or a description', () => {
@@ -569,22 +794,22 @@ describe('object descriptions', () => {
     /* anonymous is noise: the .fml ships dozens of unnamed boxes */
     const anon = { ...makeItem('sofa3', c), fromFunda: 1 as const, label: '', noLabel: 1 as const };
     f.items.push(anon);
-    expect(buildPrompt(q, f, base)).not.toMatch(/sofa 3-seat/i);
+    expect(buildPrompt(f, base)).not.toMatch(/sofa 3-seat/i);
 
     /* but a name the user typed is the opposite — leaving the staircase out of
        the text is how a render grows a corridor that is not in the plan */
     const named = { ...makeItem('sofa3', c), fromFunda: 1 as const, label: 'Kitchen run' };
     f.items.push(named);
-    expect(buildPrompt(q, f, base).toLowerCase()).toContain('kitchen run');
+    expect(buildPrompt(f, base).toLowerCase()).toContain('kitchen run');
 
     setDesc(named, 'matte black cabinetry, brass handles');
-    expect(buildPrompt(q, f, base)).toContain('matte black cabinetry, brass handles');
+    expect(buildPrompt(f, base)).toContain('matte black cabinetry, brass handles');
   });
 
   it('warns that unnamed fitted blocks are joinery, not floor', () => {
     const { q, f } = plan();
     expect(planFacts(f).anonFitted).toBeGreaterThan(0);
-    const out = buildPrompt(q, f, base);
+    const out = buildPrompt(f, base);
     expect(out).toMatch(/unnamed fitted block/i);
     expect(out).toMatch(/never open floor, a passage or a corridor/i);
   });
@@ -597,7 +822,7 @@ describe('object descriptions', () => {
     setDesc(sofa, 'dark green velvet');
     f.items.push(sofa);
 
-    const out = buildPrompt(q, f, { ...base, furniture: false });
+    const out = buildPrompt(f, { ...base, furniture: false });
     expect(out).toContain('plastered walls');
     expect(out).not.toContain('dark green velvet');
   });

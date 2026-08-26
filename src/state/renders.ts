@@ -1,5 +1,8 @@
 import { create } from 'zustand';
 import type { ViewKind } from '@engine/prompt';
+import {
+  CONTROL_KINDS, DEFAULT_PROVIDER, maxAffordablePixels, metaOf, type ControlKind,
+} from '@data/providers';
 import type { RenderRecord, RenderSettings } from '@shell/renders';
 
 /** The render workspace's own store, deliberately not part of `useEditor`.
@@ -16,15 +19,13 @@ import type { RenderRecord, RenderSettings } from '@shell/renders';
  *  this way Vitest can drive it with no renderer at all. The store holds the
  *  state; `src/shell/jobs.ts` owns the timer and the network. */
 
-/* Restated rather than imported. The same two values are exported from
-   `src/server/providers/bfl.ts`, but that file opens with `import 'server-only'`
-   and pulling it into a client bundle is a build error — so the poller and the
-   adapter have to be kept in step by hand. Same for the model name: it reaches
-   the browser nowhere in the API's responses, and a render record that does not
-   say which model drew it is a record you cannot reproduce from. */
+/* The cap on how long a render is waited for, and the sentence said when it runs
+   out. Here and nowhere else: both routes are stateless and cannot see how long a
+   job has been running, so the client poller is the only thing that can enforce
+   it. `src/server/providers/bfl.ts` used to keep a second copy for documentation,
+   which nothing imported and which the two would have drifted apart by hand. */
 export const POLL_TIMEOUT_MS = 180_000;
 export const POLL_TIMEOUT_MESSAGE = 'The render timed out after 3 minutes.';
-export const MODEL_LABEL = 'flux-2-max';
 
 /** One at a time. A double-click on Generate costs a credit per click otherwise,
  *  and there is one preview to show the result in. */
@@ -35,11 +36,74 @@ export const SEED_MAX = 4294967295;
 export const TARGET_PIXELS = 1_000_000;
 const DIM_STEP = 16;
 const MIN_DIM = 64;
-/* The provider's own ceiling, restated. `src/server/providers/bfl.ts` is
-   server-only and cannot be imported here, so this is a deliberate second copy —
-   if the provider's ever moves, this moves with it or Generate starts failing
-   validation at the route with a message no user can act on. */
-const MAX_OUTPUT_PIXELS = 4_000_000;
+
+/** Starting conditioning strength, normalised 0..1 across providers — fal's own
+ *  default for `control_scale` and `conditioning_scale` alike. A starting point,
+ *  not a finding: the eval harness exists to move it. */
+export const DEFAULT_CONTROL_SCALE = 0.75;
+
+/** How many maps ride along on a provider with no control channel of its own.
+ *
+ *  Two, and the ceiling is words rather than bytes: each attached map costs the
+ *  brief one sentence in the opening block BFL documents a 30-80 word window for,
+ *  and all four put that block at 160 words — past the point where anything late
+ *  in it is read. Dropping the sentence instead is not an option, because an
+ *  unannounced depth ramp comes back painted onto the floor as a grey gradient.
+ *  It is also what `qwenBody` slices to, and every map is another megabyte of
+ *  base64 on a request that already carries the plan. */
+const MAX_REFERENCE_MAPS = 2;
+
+/** The maps that will actually be sent, in attach order. Image 1 is always the
+ *  plan; these are images 2, 3, … in exactly this sequence.
+ *
+ *  A provider with a real control channel gets ONE, because that is all either
+ *  fal endpoint reads: `zImageBody` takes `usableControls(...)[0]` and
+ *  `fluxGeneralBody` sends a single-element `controlnets` array, fal's API
+ *  reference saying it "supports one controlnet currently". Sending a second
+ *  would have the harness file a line+depth sweep having actually measured line.
+ *  Anything the provider does not accept is dropped here rather than quietly
+ *  demoted to a reference image — and the modal says which ones went and which
+ *  did not, because a dropped choice nobody is told about is a wrong answer. */
+export function attachedControls(
+  provider: string | null | undefined, kinds: readonly ControlKind[],
+): ControlKind[] {
+  const meta = metaOf(provider);
+  const seen = new Set<ControlKind>();
+  const picked = kinds.filter(k => {
+    if (!CONTROL_KINDS.includes(k) || seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  return meta.acceptsControls.length
+    ? picked.filter(k => meta.acceptsControls.includes(k)).slice(0, 1)
+    : picked.slice(0, MAX_REFERENCE_MAPS);
+}
+
+/** The maps the brief should name, which is not the same list.
+ *
+ *  On a provider with a control channel the map is not a picture the model is
+ *  asked to look at — and on z-image it IS `image_url`, replacing the reference
+ *  outright, so a brief calling it "image 2" names an image that was never sent.
+ *  Only the multi-reference riders get sentences. */
+export function promptControls(
+  provider: string | null | undefined, kinds: readonly ControlKind[],
+): ControlKind[] {
+  return metaOf(provider).acceptsControls.length ? [] : attachedControls(provider, kinds);
+}
+
+/** The most this provider may be asked to draw: its own ceiling, or the spending
+ *  ceiling's, whichever bites first. The $0.10 limit cuts FLUX.2 [max] from 4 MP
+ *  to 1.43 MP and flux-general — which bills rounded up to whole megapixels — to
+ *  exactly 1 MP, so aiming at a provider's technical maximum is how Generate
+ *  earns a 400 from our own route with a message about money. */
+export function pixelCeiling(provider: string | null | undefined): number {
+  const meta = metaOf(provider);
+  const affordable = maxAffordablePixels(meta);
+  /* Zero means the vendor publishes no price and `assertAffordable` will refuse
+     the call outright. Shrinking the picture cannot make an unpriced render
+     affordable, so aim at the technical ceiling and let the refusal say why. */
+  return affordable > 0 ? Math.min(meta.maxOutputPixels, affordable) : meta.maxOutputPixels;
+}
 
 export interface RenderJob {
   /** also the id of the record this job becomes, so the filmstrip and the job
@@ -166,15 +230,22 @@ export const timedOut = (job: RenderJob, now: number): boolean =>
 
 /** Output size for one render, from the reference canvas's own aspect ratio.
  *
- *  FLUX.2 bills per output megapixel, so sending the reference's own
+ *  Every provider here bills per output megapixel, so sending the reference's own
  *  1800 px (~3.2 MP) would cost roughly three times a 1 MP render for a picture
- *  nobody asked to be that big. Each side is floored to a multiple of 16 — the
- *  provider rejects anything else, and rounding *up* can push the product past
- *  its 4 MP ceiling where rounding down never can. */
-export function outputDims(w: number, h: number, target = TARGET_PIXELS): { width: number; height: number } {
+ *  nobody asked to be that big. Each side is floored to a multiple of 16 — every
+ *  provider rejects anything else, and rounding *up* can push the product past a
+ *  ceiling where rounding down never can.
+ *
+ *  `provider` is what keeps the aim under the spending ceiling as well as the
+ *  model's: 1 MP is fine everywhere today, and it is fine on flux-general only
+ *  because 1 MP is exactly what a dime buys there. */
+export function outputDims(
+  w: number, h: number, provider?: string | null, target = TARGET_PIXELS,
+): { width: number; height: number } {
   const cw = Math.max(1, Math.round(w));
   const ch = Math.max(1, Math.round(h));
-  const scale = Math.sqrt(target / (cw * ch));
+  const cap = pixelCeiling(provider);
+  const scale = Math.sqrt(Math.min(target, cap) / (cw * ch));
   const snap = (v: number) => Math.max(MIN_DIM, Math.floor((v * scale) / DIM_STEP) * DIM_STEP);
   let width = snap(cw);
   let height = snap(ch);
@@ -185,7 +256,7 @@ export function outputDims(w: number, h: number, target = TARGET_PIXELS): { widt
      route. Shrink the long side back down rather than let Generate fail with a
      developer's error message. No real floor plan is this thin; the arithmetic
      is still wrong, and wrong arithmetic waits. */
-  while (width * height > MAX_OUTPUT_PIXELS) {
+  while (width * height > cap) {
     if (width >= height && width > MIN_DIM) width -= DIM_STEP;
     else if (height > MIN_DIM) height -= DIM_STEP;
     else break;
@@ -224,6 +295,15 @@ export interface RenderState extends JobState {
   dimensions: boolean;
   roomLabels: boolean;
   imgMeasures: boolean;
+  imgLabels: boolean;
+  /** which provider draws it — an id from `@data/providers`, never a model name */
+  provider: string;
+  /** the control maps to send with it, in the order they will be attached */
+  controls: ControlKind[];
+  /** 0..1, normalised across providers. Does nothing on a provider whose
+   *  `acceptsControls` is empty, which is why the modal only shows the dial when
+   *  there is a channel for it to turn. */
+  controlScale: number;
   prompt: string;
   /** the settings the current prompt was built from. The prompt outlives the
    *  modal now, so rebuilding it on every open would eat a hand-edited prompt
@@ -271,6 +351,30 @@ export const useRenders = create<RenderState>(set => ({
      thing to want and the hint under the preview still explains the cost. What
      changed is which way round the default should be. */
   imgMeasures: false,
+  /* On, and knowingly against the grain of the toggle above it.
+
+     The same bleed applies — lettering on the conditioning image can come back
+     drawn into the render — but what it buys is different. A measurement caption
+     tells the model nothing it is not already told in the prompt; an object name
+     tells it which of the blocks on the drawing is the staircase, which is the
+     kitchen run, and which grey rectangle is a sofa. The prompt can say a
+     staircase sits bottom-right, and the picture is still what gets copied.
+
+     So the prompt stops promising the reference is unlettered when this is on
+     and calls the captions a key instead. The hint under the preview states the
+     cost, and the toggle is right there. */
+  imgLabels: true,
+  /* Unchanged behaviour for everyone who already had this panel: the same model,
+     the same price, no maps attached. Every other provider is a decision someone
+     has to take on purpose, and the picker quotes what it costs. */
+  provider: DEFAULT_PROVIDER,
+  /* Off by default, and the honest reason is that nothing here has been through a
+     real control encoder yet. On FLUX.2 a map is a semantic reference at best —
+     the vendor says structure is interpreted semantically and there is no
+     strength dial in the body — so attaching one by default would spend the word
+     budget and the upload on a hypothesis. The harness is what settles it. */
+  controls: [],
+  controlScale: DEFAULT_CONTROL_SCALE,
   prompt: '',
   promptKey: '',
   seed: '',
@@ -291,11 +395,35 @@ export const rs = () => useRenders.getState();
 /* ── settings, as a value ────────────────────────────────────────── */
 
 export function settingsOf(s: Pick<RenderState,
-  'view' | 'room' | 'style' | 'furniture' | 'dimensions' | 'roomLabels' | 'imgMeasures'>): RenderSettings {
+  'view' | 'room' | 'style' | 'furniture' | 'dimensions' | 'roomLabels' | 'imgMeasures'
+  | 'imgLabels' | 'provider' | 'controls' | 'controlScale'>): RenderSettings {
   return {
     view: s.view, room: s.room, style: s.style, furniture: s.furniture,
     dimensions: s.dimensions, roomLabels: s.roomLabels, imgMeasures: s.imgMeasures,
+    imgLabels: s.imgLabels,
+    provider: s.provider,
+    /* The kinds as chosen, not as attached: what the provider could take is a
+       function of the provider, and re-running this record on another one has to
+       be able to attach the maps that one accepts. `attachedControls` narrows it
+       at the point of use. Copied rather than shared — the record outlives the
+       store's array, and a settings value that aliases live state is a record
+       that changes after it was written. */
+    controls: [...s.controls],
+    controlScale: s.controlScale,
   };
+}
+
+/** The settings a render is actually submitted with: the store's, narrowed to the
+ *  maps the provider will be given.
+ *
+ *  The record is a receipt. Storing the ticked list would have it claim a render
+ *  was conditioned on three maps when its provider takes one, and "use these
+ *  settings" would then attach maps the original picture never saw — a re-run that
+ *  is not a re-run. The ticked-but-unsent kinds are dropped on purpose: they were
+ *  never part of this image, and the picker is one click away for the next one. */
+export function submittedSettings(s: Parameters<typeof settingsOf>[0]): RenderSettings {
+  const v = settingsOf(s);
+  return { ...v, controls: attachedControls(v.provider, v.controls ?? []) };
 }
 
 /** Identifies the prompt currently on screen by what it was built from. The
@@ -309,7 +437,17 @@ export function settingsOf(s: Pick<RenderState,
  *  for. Rebuilding does discard a hand-edited prompt — but only once the plan it
  *  described has actually changed underneath it. */
 export function promptKeyOf(projectId: string, floorId: string, rev: number, s: RenderSettings): string {
-  return JSON.stringify([projectId, floorId, rev, s.view, s.room, s.style, s.furniture, s.dimensions]);
+  /* `imgLabels` is in here and the other two image toggles are not, because it
+     is the only one the prompt itself talks about: with it on the brief tells
+     the model the reference is annotated, and that sentence has to appear and
+     disappear with the flag.
+     The control maps are in here for the same reason and by the same rule — the
+     brief names each attached map — but as the maps the brief will actually
+     mention rather than the ones ticked. Ticking `seg` on a provider that only
+     takes `line` changes nothing about the words, and rebuilding for it would
+     throw away a hand-edited prompt for no change at all. */
+  return JSON.stringify([projectId, floorId, rev, s.view, s.room, s.style, s.furniture,
+    s.dimensions, !!s.imgLabels, promptControls(s.provider, s.controls ?? [])]);
 }
 
 /** "Use these settings": the record's own settings and its exact prompt back
@@ -319,6 +457,17 @@ export function promptKeyOf(projectId: string, floorId: string, rev: number, s: 
 export function applySettings(rec: RenderRecord, projectId: string, rev: number): Partial<RenderState> {
   return {
     ...rec.settings,
+    /* Written before the flag existed means rendered without the labels — a
+       spread of an absent key would otherwise leave whatever is on screen. */
+    imgLabels: !!rec.settings.imgLabels,
+    /* Same precedent, three more absent keys. A record from before there was a
+       picker was drawn by FLUX.2 [max] with no maps and no dial, and "use these
+       settings" has to reproduce that rather than inherit whichever provider is
+       selected now — re-running an old render on z-image would answer a question
+       nobody asked and bill it to the wrong hypothesis. */
+    provider: rec.settings.provider ?? DEFAULT_PROVIDER,
+    controls: [...(rec.settings.controls ?? [])],
+    controlScale: rec.settings.controlScale ?? DEFAULT_CONTROL_SCALE,
     prompt: rec.prompt,
     promptKey: promptKeyOf(projectId, rec.floorId, rev, rec.settings),
     seed: rec.seed === null ? '' : String(rec.seed),
