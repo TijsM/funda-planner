@@ -12,6 +12,7 @@ import { readImageFile, readJsonFile, exportJson } from '../files';
 import { libraryList, openPlan, removePlan, wipeLibrary } from '../library';
 import type { LibraryEntry } from '../storage';
 import { Icon } from './Icons';
+import { PhotoModal } from './PhotoModal';
 import { ShapeModal } from './ShapeModal';
 
 const close = () => ed().patch({ modal: null, calibrating: false, draft: null });
@@ -329,6 +330,7 @@ export function ModalHost() {
       {modal === 'library' && <LibraryModal />}
       {modal === 'calibrate' && <CalibrateModal />}
       {modal === 'shape' && <ShapeModal />}
+      {modal === 'photos' && <PhotoModal />}
       <input type="file" id="fileJson" accept=".json,application/json" hidden
         onChange={e => { const f = e.target.files?.[0]; if (f) readJsonFile(f); e.target.value = ''; }} />
     </>

@@ -1,9 +1,11 @@
-import type { Pt } from '@engine/types';
+import type { Area, Item, Pt } from '@engine/types';
 import {
   clipCount, clipOfFloor, clipOfSelection, clipText, cloneFloor, copyName, insertFloor,
   parseClip, pasteObjects, type Clip,
 } from '@engine/io/clip';
+import { resolveSel } from '@engine/model';
 import { ed } from '@state/store';
+import { adoptPhotos } from './photos';
 import { deleteSelection } from './commands';
 
 /** Copy, cut and paste against the *system* clipboard, so a copy survives a
@@ -38,7 +40,10 @@ export function clipOfCurrent(): { text: string; label: string } | null {
   const s = ed();
   const f = s.floor();
   if (!f) return null;
-  const c = s.sel.length ? clipOfSelection(f, s.sel) : clipOfFloor(f);
+  /* The plan id travels with the copy so a paste can tell "another plan" from
+     "this one" — object photos are stored per plan and only the first case needs
+     the bytes copied across. See `adoptPhotos`. */
+  const c = s.sel.length ? clipOfSelection(f, s.sel, s.project?.id) : clipOfFloor(f, s.project?.id);
   if (!c) return null;
   return { text: clipText(c), label: describe(c) };
 }
@@ -88,6 +93,9 @@ export function pasteClipText(raw: string, at: Pt | null = null): boolean {
     s.patch({ floorIndex: i, sel: [], draft: null });
     s.touch();
     s.toast(`Pasted floor “${f.name}”.`);
+    /* Not awaited: the floor is pasted and on screen either way, and copying a
+       few hundred kilobytes of photographs must not hold up the paint. */
+    if (c.project) void adoptPhotos(c.project, [...f.items, ...f.areas]);
     return true;
   }
 
@@ -102,6 +110,12 @@ export function pasteClipText(raw: string, at: Pt | null = null): boolean {
   }
   s.setSel(r.sel);
   s.touch();
+  if (c.project) {
+    const pasted = resolveSel(fl, r.sel)
+      .filter(o => o.t === 'item' || o.t === 'area')
+      .map(o => o.o as Item | Area);
+    void adoptPhotos(c.project, pasted);
+  }
   s.toast(
     r.skipped
       ? `Pasted ${r.sel.length} — ${r.skipped} needed a wall to sit in and found none.`

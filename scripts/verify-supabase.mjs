@@ -113,6 +113,13 @@ const PNG = Buffer.from(
   'base64',
 );
 
+/* The smallest thing the photos bucket will accept: a 1x1 baseline JPEG. The
+   bucket allows image/jpeg only, so the PNG above cannot stand in for it. */
+const JPEG = Buffer.from(
+  '/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwcJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPDs0NDP/wAALCAABAAEBAREA/8QAFAABAQAAAAAAAAAAAAAAAAAAAAn/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFAEBAAAAAAAAAAAAAAAAAAAAAP/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AJgA/9k=',
+  'base64',
+);
+
 const doc = name => ({
   schema: 2,
   id: `verify${stamp.toString(36)}`,
@@ -150,11 +157,16 @@ async function main() {
   }
   {
     const { data, error } = await admin.storage.listBuckets();
-    const bucket = data?.find(b => b.id === 'renders');
-    if (error) bad('the renders bucket', msg(error));
-    else if (!bucket) bad('the renders bucket', 'not found — the migration creates it');
-    else if (bucket.public) bad('the renders bucket', 'it is PUBLIC; every render is world-readable');
-    else ok('the renders bucket', 'private');
+    for (const [id, what, migration] of [
+      ['renders', 'every render is world-readable', '20260816120000_init.sql'],
+      ['photos', 'every object photo is world-readable', '20260826120000_photos.sql'],
+    ]) {
+      const bucket = data?.find(b => b.id === id);
+      if (error) bad(`the ${id} bucket`, msg(error));
+      else if (!bucket) bad(`the ${id} bucket`, `not found — supabase/migrations/${migration} creates it`);
+      else if (bucket.public) bad(`the ${id} bucket`, `it is PUBLIC; ${what}`);
+      else ok(`the ${id} bucket`, 'private');
+    }
   }
   if (failures) { console.log('\nStopping: the schema is not in place, so nothing below would mean anything.'); return; }
 
@@ -266,6 +278,40 @@ async function main() {
   }
 
   /* 8 */
+  step('Object photos go to their own private bucket, and stay private');
+  {
+    /* The path the app actually writes: owner, then the PLAN's client id, then
+       the photo id. Only the first segment is a permission boundary — this is
+       here to prove that a deeper key does not accidentally escape one. */
+    const photoPath = `${aSess.userId}/${doc('x').id}/${stamp}.jpg`;
+    const { error } = await A.storage.from('photos').upload(photoPath, JPEG, { contentType: 'image/jpeg', upsert: true });
+    if (error) bad('alice can upload an object photo', msg(error));
+    else ok('alice can upload an object photo', photoPath);
+
+    const { error: mime } = await A.storage.from('photos')
+      .upload(`${aSess.userId}/${stamp}.png`, PNG, { contentType: 'image/png', upsert: true });
+    mime ? ok('the bucket refuses anything but JPEG', 'allowed_mime_types holds')
+      : bad('the bucket accepts a PNG', 'allowed_mime_types is not set — the app only ever writes JPEG');
+
+    const bare = await fetch(`${URL_}/storage/v1/object/public/photos/${photoPath}`);
+    bare.ok ? bad('the photo is not publicly readable', 'IT IS — the bucket is serving without a signature')
+      : ok('the photo is not publicly readable', `HTTP ${bare.status} without a signature`);
+
+    const { error: bErr } = await B.storage.from('photos').download(photoPath);
+    bErr ? ok('RLS: bob cannot download alice\'s photo') : bad('RLS: bob cannot download alice\'s photo', 'HE CAN');
+
+    const { error: bUp } = await B.storage.from('photos')
+      .upload(`${aSess.userId}/intruder/x.jpg`, JPEG, { contentType: 'image/jpeg' });
+    bUp ? ok('RLS: bob cannot write into alice\'s photo folder') : bad('RLS: bob cannot write into alice\'s photo folder', 'HE CAN');
+
+    /* Upsert is an UPDATE once the key exists, and re-attaching a photo after a
+       failed write depends on it — a bucket with no update policy refuses it. */
+    const { error: again } = await A.storage.from('photos').upload(photoPath, JPEG, { contentType: 'image/jpeg', upsert: true });
+    again ? bad('alice can overwrite her own photo', `${msg(again)} — the update policy is missing`)
+      : ok('alice can overwrite her own photo', 'upsert works');
+  }
+
+  /* 9 */
   step('A render row references its plan, and dies with it');
   {
     const { data, error } = await A.from('renders').insert({

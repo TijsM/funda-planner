@@ -353,6 +353,9 @@ function conditionPlan(plan, opts, dir, kinds) {
   const files = { controls: {} };
   for (const pass of ['ink', ...kinds]) {
     const cv = createCanvas(frame.width, frame.height);
+    /* Nothing to annotate: the app's reference carries no glyph, so neither does
+       the sweep's. It briefly carried numbered discs and the renders came back
+       with the discs painted on the floor — see docs/EVAL.md. */
     paintPass(cv.getContext('2d'), { floor, frame, pass, furniture: opts.furniture });
     const name = pass === 'ink' ? 'reference.png' : `control-${pass}.png`;
     writeFileSync(join(dir, name), cv.toBuffer('image/png'));

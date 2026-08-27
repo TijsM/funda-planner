@@ -62,13 +62,15 @@ export function readImageFile(file: File, onDone?: () => void) {
 export interface FloorCanvasOpts {
   clean?: boolean; furniture?: boolean; roomLabels?: boolean; maxPx?: number;
   layers?: Layers; measures?: boolean; objectLabels?: boolean;
+  /** The room the brief is scoped to, so the picture frames what the brief
+   *  describes and the control maps beside it are framed the same way. */
+  room?: string;
   /** Draw one of the conditioning passes instead of the plan — a line map, a
    *  depth map, a segmentation map or a change mask, framed identically to the
    *  reference beside it because both come out of the same `planFrame()`.
    *
-   *  `'ink'` is deliberately not what the app's own reference uses: a pass draws
-   *  no text at all, and the reference may carry object names (`imgLabels`). The
-   *  two differ by that one bargain and nothing else. */
+   *  `'ink'` draws the same picture the app's own reference does — both are
+   *  glyph-free, and the harness measures what we actually send. */
   pass?: PassKind;
 }
 
@@ -118,15 +120,15 @@ export function renderFloorCanvas(
     roomLabels: opts.roomLabels !== false,
     vignette: false,
     measures: opts.measures,
-    /* A print keeps its labels; a clean reference drops them unless it is asked
-       for them. Naming every block on the picture is the only way to tell the
-       model which shape is the staircase and which is the kitchen run — the
-       prompt says where each object is, but the drawing is what it copies.
-       The cost is real and measured: lettering on the conditioning image bleeds
-       through into the render, which is why measurements default off. So the
-       prompt has to change with this flag, and it does — see `imgLabels` in
-       `prompt.ts`, which stops claiming the reference is unlettered and calls
-       the captions a key to be read rather than drawn. */
+    /* A print keeps its captions. A clean reference carries no glyph of any kind,
+       and this is the line that guarantees it.
+       Two rounds of renders settled the question. Captions came out at 12 px on
+       an 1800 px picture — 1.6 px of grey after the model's downsample — so a
+       fireplace came back as a cabinet. The numbered discs that replaced them
+       were legible, and the model dutifully painted nine black roundels onto the
+       floor of the render. There is no size at which our annotation is read as
+       annotation: the picture is the thing being copied. Identity now lives in
+       the brief's OBJECTS table, in words, where being wrong is free. */
     objectLabels: opts.objectLabels ?? !opts.clean,
     hatchFixtures: !opts.clean,
     /* the renderer's sizes are tuned for a screen canvas; a print is 3-4× that */
@@ -149,14 +151,15 @@ export const REFERENCE_MAX_PX = 1800;
  *  draws a dimension chain: it changes the margin the frame solves for, so
  *  leaving it out would frame the maps tighter than the picture they condition. */
 export function referenceOpts(
-  s: Pick<RenderSettings, 'furniture' | 'roomLabels' | 'imgMeasures' | 'imgLabels'>,
+  s: Pick<RenderSettings, 'furniture' | 'roomLabels' | 'imgMeasures' | 'room'>,
 ): FloorCanvasOpts {
   return {
     clean: true,
     furniture: s.furniture,
     roomLabels: s.roomLabels,
     measures: s.imgMeasures,
-    objectLabels: s.imgLabels,
+    objectLabels: false,
+    room: s.room,
     maxPx: REFERENCE_MAX_PX,
   };
 }

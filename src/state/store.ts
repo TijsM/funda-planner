@@ -9,7 +9,7 @@ import { blankProject, migrate, resolveSel } from '@engine/model';
  *  render; the canvas subscribes to everything and repaints imperatively. */
 
 export type Tool = 'select' | 'pan' | 'wall' | 'room' | 'door' | 'window' | 'text' | 'measure';
-export type ModalId = 'import' | 'library' | 'calibrate' | 'render' | 'shape' | null;
+export type ModalId = 'import' | 'library' | 'calibrate' | 'render' | 'shape' | 'photos' | null;
 
 export interface Toast { id: string; text: string; kind?: 'ok' | 'err' }
 
@@ -48,6 +48,12 @@ export interface EditorState {
    *  editor opens with, because a person who typed "kliko" and got nothing has
    *  already said what they are drawing. */
   shapeSeed: string;
+  /** Which object the photo manager is open on. A `SelRef` and not the object
+   *  itself: the document is mutated in place and an object captured in state
+   *  survives its own deletion, undo and a floor change — the modal would then
+   *  be editing a copy nothing draws. Resolved through `resolveSel` on every
+   *  render, so it closes itself the moment the object stops existing. */
+  photoTarget: SelRef | null;
   toasts: Toast[];
   undo: string[];
   redo: string[];
@@ -98,6 +104,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   savedId: null,
   modal: null,
   shapeSeed: '',
+  photoTarget: null,
   trayOpen: false,
   calibrating: false,
   toasts: [],

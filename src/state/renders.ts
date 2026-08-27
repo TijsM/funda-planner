@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ViewKind } from '@engine/prompt';
+import type { PhotoSubject, ViewKind } from '@engine/prompt';
 import {
   CONTROL_KINDS, DEFAULT_PROVIDER, maxAffordablePixels, metaOf, type ControlKind,
 } from '@data/providers';
@@ -89,6 +89,73 @@ export function promptControls(
   provider: string | null | undefined, kinds: readonly ControlKind[],
 ): ControlKind[] {
   return metaOf(provider).acceptsControls.length ? [] : attachedControls(provider, kinds);
+}
+
+/** How many object photographs this provider has room for, once the plan and any
+ *  semantic control maps have taken theirs.
+ *
+ *  `promptControls` and not `attachedControls`: a map going into a real control
+ *  channel does not occupy a reference slot, and on z-image it replaces the
+ *  reference outright. The maps that cost a slot are exactly the ones the brief
+ *  has to name, which is what that function already computes. */
+export function photoSlots(
+  provider: string | null | undefined, kinds: readonly ControlKind[],
+): number {
+  const meta = metaOf(provider);
+  const spare = Math.max(0, meta.maxReferences - 1);
+  return Math.max(0, spare - promptControls(provider, kinds).length);
+}
+
+/** One photograph on its way out, with the image number the brief will call it. */
+export interface AttachedPhoto {
+  /** the photo id — what `getPhoto` reads the bytes with */
+  id: string;
+  /** the object it belongs to, so the panel can mark the row it came from */
+  objId: string;
+  label: string;
+  room: string;
+  /** what this angle shows, if the person said — straight from the `PhotoRef` */
+  note?: string;
+  /** its position in the request: image 1 is the plan, so these start at 2 */
+  n: number;
+}
+
+/** Which photographs actually go, in attach order.
+ *
+ *  Two passes, and the order between them is the product decision: every ticked
+ *  object contributes its FIRST photo before any object contributes a second.
+ *  Coverage before detail — six objects each specified once beats one sofa
+ *  photographed from six angles and a room full of invented furniture. Only once
+ *  every ticked object has a slot do the extra angles fill what is left.
+ *
+ *  Because the first pass stops at the budget, the second cannot run while any
+ *  ticked object is still without a photo. That is not a coincidence to be
+ *  preserved by comment — it is the loop.
+ *
+ *  `off` is the unticked set rather than the ticked one so that a newly
+ *  photographed object is included by default: the panel is a list of exclusions,
+ *  and a fresh photo nobody has been asked about should be sent. */
+export function attachedPhotos(
+  provider: string | null | undefined,
+  kinds: readonly ControlKind[],
+  subjects: readonly PhotoSubject[],
+  off: ReadonlySet<string> = new Set(),
+): AttachedPhoto[] {
+  const budget = photoSlots(provider, kinds);
+  if (budget <= 0) return [];
+  const on = subjects.filter(s => s.photos.length && !off.has(s.objId));
+  const deepest = on.reduce((n, s) => Math.max(n, s.photos.length), 0);
+
+  const out: AttachedPhoto[] = [];
+  for (let k = 0; k < deepest && out.length < budget; k++) {
+    for (const s of on) {
+      if (out.length >= budget) break;
+      const p = s.photos[k];
+      if (!p) continue;
+      out.push({ id: p.id, objId: s.objId, label: s.label, room: s.room, note: p.note, n: out.length + 2 });
+    }
+  }
+  return out;
 }
 
 /** The most this provider may be asked to draw: its own ceiling, or the spending
@@ -295,7 +362,6 @@ export interface RenderState extends JobState {
   dimensions: boolean;
   roomLabels: boolean;
   imgMeasures: boolean;
-  imgLabels: boolean;
   /** which provider draws it — an id from `@data/providers`, never a model name */
   provider: string;
   /** the control maps to send with it, in the order they will be attached */
@@ -304,6 +370,14 @@ export interface RenderState extends JobState {
    *  `acceptsControls` is empty, which is why the modal only shows the dial when
    *  there is a channel for it to turn. */
   controlScale: number;
+  /** Objects whose photographs are NOT to be sent, by object id.
+   *
+   *  Exclusions rather than inclusions, so a photo attached after the panel was
+   *  last open is sent rather than silently left behind — the default for a
+   *  photograph somebody bothered to take is "use it". Not part of
+   *  `RenderSettings`: what a record has to remember is which photos actually
+   *  went, and that is `settings.photos`. */
+  photoOff: string[];
   prompt: string;
   /** the settings the current prompt was built from. The prompt outlives the
    *  modal now, so rebuilding it on every open would eat a hand-edited prompt
@@ -351,19 +425,6 @@ export const useRenders = create<RenderState>(set => ({
      thing to want and the hint under the preview still explains the cost. What
      changed is which way round the default should be. */
   imgMeasures: false,
-  /* On, and knowingly against the grain of the toggle above it.
-
-     The same bleed applies — lettering on the conditioning image can come back
-     drawn into the render — but what it buys is different. A measurement caption
-     tells the model nothing it is not already told in the prompt; an object name
-     tells it which of the blocks on the drawing is the staircase, which is the
-     kitchen run, and which grey rectangle is a sofa. The prompt can say a
-     staircase sits bottom-right, and the picture is still what gets copied.
-
-     So the prompt stops promising the reference is unlettered when this is on
-     and calls the captions a key instead. The hint under the preview states the
-     cost, and the toggle is right there. */
-  imgLabels: true,
   /* Unchanged behaviour for everyone who already had this panel: the same model,
      the same price, no maps attached. Every other provider is a decision someone
      has to take on purpose, and the picker quotes what it costs. */
@@ -375,6 +436,7 @@ export const useRenders = create<RenderState>(set => ({
      budget and the upload on a hypothesis. The harness is what settles it. */
   controls: [],
   controlScale: DEFAULT_CONTROL_SCALE,
+  photoOff: [],
   prompt: '',
   promptKey: '',
   seed: '',
@@ -396,11 +458,10 @@ export const rs = () => useRenders.getState();
 
 export function settingsOf(s: Pick<RenderState,
   'view' | 'room' | 'style' | 'furniture' | 'dimensions' | 'roomLabels' | 'imgMeasures'
-  | 'imgLabels' | 'provider' | 'controls' | 'controlScale'>): RenderSettings {
+  | 'provider' | 'controls' | 'controlScale'>): RenderSettings {
   return {
     view: s.view, room: s.room, style: s.style, furniture: s.furniture,
     dimensions: s.dimensions, roomLabels: s.roomLabels, imgMeasures: s.imgMeasures,
-    imgLabels: s.imgLabels,
     provider: s.provider,
     /* The kinds as chosen, not as attached: what the provider could take is a
        function of the provider, and re-running this record on another one has to
@@ -437,17 +498,25 @@ export function submittedSettings(s: Parameters<typeof settingsOf>[0]): RenderSe
  *  for. Rebuilding does discard a hand-edited prompt — but only once the plan it
  *  described has actually changed underneath it. */
 export function promptKeyOf(projectId: string, floorId: string, rev: number, s: RenderSettings): string {
-  /* `imgLabels` is in here and the other two image toggles are not, because it
-     is the only one the prompt itself talks about: with it on the brief tells
-     the model the reference is annotated, and that sentence has to appear and
-     disappear with the flag.
-     The control maps are in here for the same reason and by the same rule — the
-     brief names each attached map — but as the maps the brief will actually
-     mention rather than the ones ticked. Ticking `seg` on a provider that only
-     takes `line` changes nothing about the words, and rebuilding for it would
-     throw away a hand-edited prompt for no change at all. */
+  /* None of the three image toggles are in here any more. The brief used to make
+     a claim about the reference being annotated, and that sentence had to appear
+     and disappear with the flag — but the reference carries no annotation now,
+     on any setting, so nothing the picture does changes a word of the text.
+     The control maps stay, by the rule that survived: the brief names each
+     attached map. As the maps the brief will actually mention, though, not the
+     ones ticked — ticking `seg` on a provider that only takes `line` changes
+     nothing about the words, and rebuilding for it would throw away a
+     hand-edited prompt for no change at all. */
   return JSON.stringify([projectId, floorId, rev, s.view, s.room, s.style, s.furniture,
-    s.dimensions, !!s.imgLabels, promptControls(s.provider, s.controls ?? [])]);
+    s.dimensions, promptControls(s.provider, s.controls ?? []),
+    /* The photographs are in here as the ids that will actually be attached, for
+       the same reason the maps are: the brief names each one and numbers it, so a
+       photo added, unticked or bumped out of the last slot changes the words. It
+       is also what makes "use these settings" honest — the recorded list is
+       compared against what the plan can attach today, and a difference rebuilds
+       the prompt rather than leaving sentences pointing at pictures that are no
+       longer there. */
+    s.photos ?? []]);
 }
 
 /** "Use these settings": the record's own settings and its exact prompt back
@@ -455,11 +524,17 @@ export function promptKeyOf(projectId: string, floorId: string, rev: number, s: 
  *  prompt is restored verbatim rather than rebuilt — a hand-edited prompt is
  *  what produced that render, and rebuilding it would quietly discard the edit. */
 export function applySettings(rec: RenderRecord, projectId: string, rev: number): Partial<RenderState> {
+  /* `photos` is a receipt and not a setting — see `RenderSettings.photos`. It
+     stays out of the store: what goes next time is whatever the plan carries
+     now, and `promptKey` below is what notices when that differs from what went
+     then, rebuilding the brief so its image numbers stay true. */
+  /* `imgLabels` goes the same way, for a different reason: it is a retired flag
+     from the window in which the reference carried numbered discs. The record
+     keeps it as a fact about how that render was made; the store has no such
+     field any more, and spreading a dead key into it is how dead keys come back. */
+  const { photos: _sent, imgLabels: _retired, ...settings } = rec.settings;
   return {
-    ...rec.settings,
-    /* Written before the flag existed means rendered without the labels — a
-       spread of an absent key would otherwise leave whatever is on screen. */
-    imgLabels: !!rec.settings.imgLabels,
+    ...settings,
     /* Same precedent, three more absent keys. A record from before there was a
        picker was drawn by FLUX.2 [max] with no maps and no dial, and "use these
        settings" has to reproduce that rather than inherit whichever provider is

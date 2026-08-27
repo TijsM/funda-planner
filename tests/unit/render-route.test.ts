@@ -33,6 +33,17 @@ function png(width = 64, height = 64): string {
   return cv.toBuffer('image/png').toString('base64');
 }
 
+/** A real JPEG, for the same reason: object photographs are measured with a
+ *  JPEG reader before a credit is spent, and a payload that is merely
+ *  base64-shaped is refused ahead of the pricing. */
+function jpg(width = 64, height = 64): string {
+  const cv = createCanvas(width, height);
+  const g = cv.getContext('2d');
+  g.fillStyle = '#8a7f6a';
+  g.fillRect(0, 0, width, height);
+  return cv.toBuffer('image/jpeg').toString('base64');
+}
+
 const REF = png();
 
 /** A submit that should go through, so a test can change one thing about it. */
@@ -466,5 +477,209 @@ describe('GET /api/render/status — one allowlist per provider', () => {
     expect(await said(res)).toContain('FLUX.2 [max]');
     expect(sent.map((s) => s.url)).not.toContain('https://evil.example/x.png');
     expect(sent).toHaveLength(1);
+  });
+});
+
+/* ── object photographs ──────────────────────────────────────────── */
+
+describe('POST /api/render — object photos', () => {
+  const photo = (over: Record<string, unknown> = {}) =>
+    ({ id: 'p1', base64: jpg(), label: 'sofa (living room)', ...over });
+
+  const bodyOf = (n = 0) => JSON.parse(String(sent[n].init.body)) as Record<string, string>;
+
+  it('puts a photograph in the first spare reference slot', async () => {
+    const res = await post({ ...OK, refs: [photo()] });
+    expect(res.status).toBe(200);
+    const body = bodyOf();
+    expect(body.input_image).toBe(REF);
+    expect(body.input_image_2).toBe(photo().base64);
+    expect(body.input_image_3).toBeUndefined();
+  });
+
+  /* The order is the whole reason the brief can number anything. A photograph of
+     the sofa someone bought is what the render is for; a map handed to a model
+     with no control channel is an experiment, and the experiment is what gets
+     dropped when the slots run out. */
+  it('numbers photographs before control maps', async () => {
+    const res = await post({
+      ...OK,
+      refs: [photo(), photo({ id: 'p2', label: 'bed' })],
+      controls: [{ kind: 'line', base64: png() }],
+    });
+    expect(res.status).toBe(200);
+    const body = bodyOf();
+    expect(body.input_image_2).toBe(photo().base64);
+    expect(body.input_image_3).toBe(photo().base64);
+    /* the map lands after both photographs, in slot 4 */
+    expect(body.input_image_4).toBe(png());
+  });
+
+  it('sends photographs to Qwen as extra image_urls, declared as JPEG', async () => {
+    const res = await post({ ...OK, provider: 'qwen-edit', width: 960, height: 960, refs: [photo()] });
+    expect(res.status).toBe(200);
+    const body = JSON.parse(String(sent[0].init.body)) as { image_urls: string[] };
+    expect(body.image_urls).toHaveLength(2);
+    expect(body.image_urls[1].startsWith('data:image/jpeg;base64,')).toBe(true);
+  });
+
+  it('drops the tail rather than overfilling a provider with two slots', async () => {
+    const refs = Array.from({ length: 5 }, (_, k) => photo({ id: `p${k}` }));
+    const res = await post({ ...OK, provider: 'qwen-edit', width: 960, height: 960, refs });
+    expect(res.status).toBe(200);
+    const body = JSON.parse(String(sent[0].init.body)) as { image_urls: string[] };
+    /* the plan plus the two Qwen actually takes */
+    expect(body.image_urls).toHaveLength(3);
+  });
+
+  it('refuses more photographs than any provider has room for', async () => {
+    const refs = Array.from({ length: 8 }, (_, k) => photo({ id: `p${k}` }));
+    const res = await post({ ...OK, refs });
+    expect(res.status).toBe(400);
+    expect(await said(res)).toContain('8 object photos');
+    expect(sent).toHaveLength(0);
+  });
+
+  /* A PNG here is a client that has invented its own pipeline: everything in
+     `refs` comes out of `encodePhoto`, which produces exactly one format. */
+  it('refuses a photograph that is not a JPEG, before spending anything', async () => {
+    const res = await post({ ...OK, refs: [photo({ base64: png() })] });
+    expect(res.status).toBe(400);
+    expect(await said(res)).toContain('not a JPEG');
+    expect(sent).toHaveLength(0);
+  });
+
+  it('refuses a photograph that is not base64 at all', async () => {
+    const res = await post({ ...OK, refs: [photo({ base64: 'https://example.com/sofa.jpg' })] });
+    expect(res.status).toBe(400);
+    expect(await said(res)).toContain('not base64');
+    expect(sent).toHaveLength(0);
+  });
+
+  it('names the object when a photograph carries no data', async () => {
+    const res = await post({ ...OK, refs: [photo({ base64: '' })] });
+    expect(res.status).toBe(400);
+    expect(await said(res)).toContain('sofa (living room)');
+    expect(sent).toHaveLength(0);
+  });
+
+  it('counts photographs into the same megapixel ceiling as everything else', async () => {
+    /* Four 1800² photographs are 13 MP, and the plan is 3.2 on top — over the
+       16 MP the route allows for one request. */
+    const big = Array.from({ length: 4 }, (_, k) => photo({ id: `p${k}`, base64: jpg(1800, 1800) }));
+    const res = await post({ ...OK, imageBase64: png(1800, 1800), refs: big });
+    expect(res.status).toBe(413);
+    const msg = await said(res);
+    expect(msg).toContain('4 object photos');
+    expect(msg).toContain('megapixels');
+    expect(sent).toHaveLength(0);
+  });
+
+  it('takes a photograph with a data: prefix, the way canvas hands it over', async () => {
+    const res = await post({ ...OK, refs: [photo({ base64: `data:image/jpeg;base64,${jpg()}` })] });
+    expect(res.status).toBe(200);
+    expect(bodyOf().input_image_2).toBe(jpg());
+  });
+
+  it('sends no photograph at all to a provider with one image input', async () => {
+    const res = await post({ ...OK, provider: 'z-image-cn', width: 960, height: 960, refs: [photo()] });
+    expect(res.status).toBe(200);
+    const body = JSON.parse(String(sent[0].init.body)) as Record<string, unknown>;
+    /* z-image has `image_url` and nothing else — the photograph has nowhere to go */
+    expect(JSON.stringify(body)).not.toContain(photo().base64);
+  });
+});
+
+/* ── the provider with no delivery host ──────────────────────────── */
+
+describe('both routes — an OpenAI render, which never has a URL', () => {
+  /** The finished image OpenAI hands back inline. A different size from `REF` so
+   *  a test cannot pass by echoing the reference back. */
+  const DRAWN = png(32, 32);
+
+  const OPENAI_OK = {
+    data: [{ b64_json: DRAWN }],
+    size: '1024x1024',
+    quality: 'medium',
+    output_format: 'png',
+    usage: {
+      input_tokens: 4800,
+      input_tokens_details: { image_tokens: 4741, text_tokens: 59 },
+      output_tokens: 1056,
+      total_tokens: 5856,
+    },
+  };
+
+  beforeEach(() => {
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+    respond = () => json(OPENAI_OK);
+  });
+
+  /** The submit route answers before the render exists — OpenAI's endpoint is
+   *  synchronous and the provider holds it in memory — so the status route has to
+   *  be asked more than once. */
+  async function collect(query: string) {
+    for (let i = 0; i < 40; i++) {
+      const res = await get(query);
+      const body = await res.json() as { status?: string; image?: string; contentType?: string; error?: string };
+      if (body.status !== 'pending') return body;
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    throw new Error('the render never left pending');
+  }
+
+  it('carries a render from submit to bytes with no delivery host in between', async () => {
+    /* The whole point of the shape: every other provider finishes by naming a URL
+       on a CDN that the status route downloads, and this one finishes by having
+       the bytes already. If the `data:` URI the provider reports were not
+       accepted by `deliver()`, this is where it would show up — as a render that
+       polls ready and then fails to be fetched. */
+    const submit = await post({ ...OK, provider: 'openai-image-mini' });
+    expect(submit.status).toBe(200);
+    const job = await submit.json() as { jobId: string; pollUrl: string; provider: string; estimatedUsd: number };
+    expect(job.provider).toBe('openai-image-mini');
+    /* Priced before the money, from the flat rate — the megapixel rate is null
+       and must not have been read as free. */
+    expect(job.estimatedUsd).toBeCloseTo(0.095, 6);
+
+    const query = new URLSearchParams({
+      jobId: job.jobId, pollUrl: job.pollUrl, provider: job.provider,
+    }).toString();
+    const done = await collect(query);
+    expect(done.status).toBe('ready');
+    /* The bytes the vendor drew, unchanged, all the way to the response the
+       browser writes into IndexedDB. */
+    expect(done.image).toBe(DRAWN);
+    expect(done.contentType).toBe('image/png');
+    /* One request to OpenAI and nothing else. In particular the status route must
+       not have gone looking for a delivery host to download from. */
+    expect(sent).toHaveLength(1);
+    expect(sent[0].url).toBe('https://api.openai.com/v1/images/edits');
+  });
+
+  it('will not poll an OpenAI job through another provider', async () => {
+    /* The same rule the other providers get: a poll URL is checked against the
+       allowlist of the provider it is claimed for, never a union of all of them.
+       This one is a handle rather than an address, so the check is what stops a
+       caller naming somebody else's job. */
+    const submit = await post({ ...OK, provider: 'openai-image-mini' });
+    const job = await submit.json() as { jobId: string; pollUrl: string };
+    const res = await get(new URLSearchParams({
+      jobId: job.jobId, pollUrl: job.pollUrl, provider: 'z-image-cn',
+    }).toString());
+    expect(res.status).toBe(400);
+    expect(await said(res)).toContain('Z-Image');
+  });
+
+  it('refuses a render on OpenAI when the key is not set, before spending', async () => {
+    delete process.env.OPENAI_API_KEY;
+    const res = await post({ ...OK, provider: 'openai-image-mini' });
+    expect(res.status).toBe(500);
+    const message = await said(res);
+    expect(message).toContain('OPENAI_API_KEY');
+    /* And it names where a key comes from, which is the half of the message that
+       is actionable. */
+    expect(message).toContain('platform.openai.com');
+    expect(sent).toHaveLength(0);
   });
 });

@@ -1,15 +1,17 @@
 import { uid } from '@engine/geometry';
 import { ed } from '@state/store';
 import {
-  POLL_TIMEOUT_MESSAGE, POLL_TIMEOUT_MS, acceptJob, applyPoll, busy, failJob, inFlight,
-  nextSeed, outputDims, pollDelay, rs, startJob, submittedSettings, timedOut,
+  POLL_TIMEOUT_MESSAGE, POLL_TIMEOUT_MS, acceptJob, applyPoll, attachedPhotos, busy, failJob,
+  inFlight, nextSeed, outputDims, pollDelay, rs, startJob, submittedSettings, timedOut,
   type PollResponse, type RenderJob,
 } from '@state/renders';
-import { MAX_USD_PER_IMAGE, metaOf, modelLabelOf } from '@data/providers';
+import { photoSubjects } from '@engine/prompt';
+import { ceilingUsd, metaOf, modelLabelOf } from '@data/providers';
 import { isCloud } from '@data/config';
 import { ensurePlanSynced } from '@data/sync';
 import { cloudRowId, noteRowId, resumePending, uploadThumbnail } from '@data/cloudRenders';
 import { pngBase64, referenceOpts, renderControlCanvases } from './files';
+import { photoBase64 } from './photos';
 import { listRenders, pngFromBase64, putRender, renderBlob, type RenderRecord } from './renders';
 
 /** Drives one render from Generate to a row in the filmstrip.
@@ -402,8 +404,19 @@ export async function startRender(canvas: HTMLCanvasElement | null): Promise<voi
   /* The maps this provider will actually be given, resolved before the record is
      built: `submittedSettings` is what makes the row a receipt for the render that
      went rather than for the boxes that were ticked. */
-  const settings = submittedSettings(r);
-  const kinds = settings.controls ?? [];
+  const base = submittedSettings(r);
+  const kinds = base.controls ?? [];
+
+  /* Which photographs go, worked out here rather than read off the panel. The
+     panel computes the same list from the same two pure functions — to draw its
+     checkboxes and to number the sentences in the brief — but the panel is a
+     view, and what gets paid for must not depend on one having been open.
+     Synchronous, so it can be part of the record before the slot is claimed;
+     reading the bytes is the slow half and happens below. */
+  const picked = attachedPhotos(base.provider, kinds, photoSubjects(floor, base.room), new Set(r.photoOff));
+  /* The ids that go, in the order they go: the row's answer to "which of my
+     sofas is in this picture". */
+  const settings: typeof base = { ...base, photos: picked.map(p => p.id) };
   const seed = nextSeed(r.seed, r.seedLocked);
   const { width, height } = outputDims(canvas.width, canvas.height, settings.provider);
   const job: RenderJob = {
@@ -426,6 +439,26 @@ export async function startRender(canvas: HTMLCanvasElement | null): Promise<voi
      awaited: the second half of a double-click arrives in this same tick. */
   rs().patch({ ...startJob(rs(), job), seed: String(seed) });
   startClock();
+
+  /* The photographs' bytes, read after the slot is claimed for the same reason
+     the maps are drawn after it. `giveUp` rather than a toast: the slot is ours
+     now, and an early return would leave it held for the life of the tab. */
+  const refs: { id: string; base64: string; label: string }[] = [];
+  for (const p of picked) {
+    const base64 = await photoBase64(project.id, p.id);
+    /* No partial send. The brief names image 3 and counts up from there, so
+       dropping one photograph renumbers every photograph after it — the sentence
+       about the sofa would be pointing at the wardrobe. */
+    if (!base64) {
+      await giveUp(
+        job,
+        `The photo of the ${p.label} could not be read on this device, so nothing was sent — the`
+        + ' brief names that picture. Untick it in the render panel, or reload to fetch it again.',
+      );
+      return;
+    }
+    refs.push({ id: p.id, base64, label: p.room ? `${p.label} (${p.room})` : p.label });
+  }
 
   /* The maps, drawn after the slot is claimed and not before: two passes plus
      their PNG encoding is a few hundred milliseconds of synchronous work, and the
@@ -459,6 +492,7 @@ export async function startRender(canvas: HTMLCanvasElement | null): Promise<voi
        control channel it turns nothing, and a field that cannot matter reads in
        the log as though it did. */
     ...(controls.length ? { controls, controlScale: settings.controlScale } : {}),
+    ...(refs.length ? { refs } : {}),
   };
 
   if (cloud) {
@@ -526,7 +560,8 @@ export async function startRender(canvas: HTMLCanvasElement | null): Promise<voi
      costs more than the panel claims. */
   if (body?.overCeiling === true) {
     const quoted = typeof body.quotedUsd === 'number' ? `$${body.quotedUsd.toFixed(3)}` : 'more than the ceiling';
-    ed().toast(`The provider quoted ${quoted} for that render — over the $${MAX_USD_PER_IMAGE.toFixed(2)} ceiling. The rate in the picker is wrong; stop rendering on this provider until it is fixed.`, 'err');
+    const cap = ceilingUsd(metaOf(job.settings.provider));
+    ed().toast(`The provider quoted ${quoted} for that render — over the $${cap.toFixed(2)} ceiling. The rate in the picker is wrong; stop rendering on this provider until it is fixed.`, 'err');
   }
 
   const accepted = acceptJob(rs(), job.id, jobId, pollUrl, renderId || undefined);

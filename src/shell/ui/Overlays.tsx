@@ -4,17 +4,19 @@ import { useEffect, useRef, useState } from 'react';
 import { ed, useEditor, useEditorShallow, useSelection } from '@state/store';
 import { CATALOG, CAT_BY_KIND, ROOM_SWATCHES, SWATCHES, toneFor } from '@engine/catalog';
 import { dist, fmtM2, polyArea, R2 } from '@engine/geometry';
-import { labelOf, setDesc, setLabel } from '@engine/model';
+import { labelOf, photosOf, setDesc, setLabel } from '@engine/model';
 import { selScreenBBox, snapPoint, toWorld } from '@engine/view';
-import type { Area, Item, Layers, Note, Opening, SelObj, Shape, Wall } from '@engine/types';
+import type { Area, Item, Layers, Note, Opening, PhotoRef, SelObj, Shape, Wall } from '@engine/types';
 import { drawShape, shapesOf } from '@engine/custom';
 import {
   SPECIALS, addOpeningTo, deleteSelection, duplicateSelection, placeCatalogItem,
   placeSpecial, removeShape, rotateSelection, type SpecialKind,
 } from '../commands';
 import { copySelection } from '../clipboard';
+import { addPhotos } from '../photos';
 import { coachSeen, markCoachSeen } from '../storage';
 import { Icon } from './Icons';
+import { usePhotoState } from './photoUrls';
 
 /* ══════════════════ the Add tray ══════════════════ */
 
@@ -273,7 +275,10 @@ export function ObjectToolbar() {
   /* Anything describable shows the row outright. It was behind a button to keep
      the bar narrow, but a field you have to go and find does not get used. */
   const one = sel.length === 1 ? sel[0] : null;
-  const target = one && (one.t === 'item' || one.t === 'area') ? one.o : null;
+  /* Kept as the selection entry rather than the object alone: the photo strip
+     has to be able to name what it is pointing at, and `{ t, id }` is the only
+     handle that survives the document being mutated underneath it. */
+  const target = one && (one.t === 'item' || one.t === 'area') ? one : null;
 
   useEffect(() => {
     if (!show) { setPos(null); return; }
@@ -315,8 +320,79 @@ export function ObjectToolbar() {
       style={pos ? { left: pos.x, top: pos.y } : { visibility: 'hidden' }}
     >
       <div className="ctx-row"><ToolbarBody sel={sel} /></div>
-      {target && <DescRow o={target} />}
+      {target && <DescRow o={target.o} />}
+      {target && <PhotoRow o={target.o} t={target.t} />}
     </div>
+  );
+}
+
+/** The photographs of the real thing, on the object itself.
+ *
+ *  Beside the description rather than behind a menu, and for the same reason the
+ *  description row was brought out: what is not on screen at the moment of
+ *  selecting a sofa does not get used. A description says "grey, three-seater";
+ *  this says which sofa. */
+function PhotoRow({ o, t }: { o: Item | Area; t: 'item' | 'area' }) {
+  const project = useEditor(s => s.project);
+  /* photos are pushed onto the object in place, so the strip redraws on the
+     revision counter and not on any array identity */
+  useEditor(s => s.rev);
+  const file = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  const photos = photosOf(o);
+  if (!project) return null;
+
+  const take = async (files: FileList | null) => {
+    if (!files?.length) return;
+    setBusy(true);
+    try { await addPhotos(o, files); } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="ctx-photos">
+      <Icon id="i-cam" />
+      {photos.map((p, i) => (
+        <PhotoTile
+          key={p.id} projectId={project.id} photo={p} primary={i === 0}
+          onOpen={() => ed().patch({ modal: 'photos', photoTarget: { t, id: o.id } })}
+        />
+      ))}
+      <input
+        ref={file} type="file" accept="image/*" multiple hidden
+        onChange={e => { void take(e.target.files); e.target.value = ''; }}
+      />
+      <button
+        className="cb" id="ctxPhotoAdd" disabled={busy}
+        title={photos.length
+          ? 'Attach another photo of this object'
+          : 'Attach a photo of the real object — the render will draw that one'}
+        onClick={e => { e.stopPropagation(); file.current?.click(); }}
+      >
+        <Icon id="i-plus" />
+        <span>{busy ? 'Reading…' : photos.length ? 'Photo' : 'Add photo'}</span>
+      </button>
+    </div>
+  );
+}
+
+/** One thumbnail. The primary is ringed, because index 0 is not decoration: it
+ *  is the photo that goes when the render has fewer slots than photos. */
+function PhotoTile({ projectId, photo, primary, onOpen }: {
+  projectId: string; photo: PhotoRef; primary: boolean; onOpen: () => void;
+}) {
+  const { url, missing } = usePhotoState(projectId, photo.id);
+  return (
+    <button
+      className={`ctx-photo${primary ? ' pri' : ''}${missing ? ' gone' : ''}`} data-photo={photo.id}
+      title={missing
+        ? `${photo.name ?? 'This photo'} is not on this device — it was attached elsewhere, or the`
+          + ' plan was imported without it. The render will not be sent with it.'
+        : `${photo.name ?? 'photo'}${primary ? ' — sent first' : ''}\nClick to manage`}
+      onClick={e => { e.stopPropagation(); onOpen(); }}
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      {url ? <img src={url} alt={photo.name ?? 'attached photo'} /> : <i>{missing ? '!' : ''}</i>}
+    </button>
   );
 }
 

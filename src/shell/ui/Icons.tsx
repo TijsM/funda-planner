@@ -23,6 +23,10 @@ export function IconSprite() {
         <symbol id="i-grid" viewBox="0 0 24 24"><path d="M3 9h18M3 15h18M9 3v18M15 3v18" stroke="currentColor" strokeWidth="1.3"/><rect x="3" y="3" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.5"/></symbol>
         <symbol id="i-magnet" viewBox="0 0 24 24"><path d="M6 3v9a6 6 0 0012 0V3h-4v9a2 2 0 01-4 0V3z" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"/><path d="M6 7h4M14 7h4" stroke="currentColor" strokeWidth="1.4"/></symbol>
         <symbol id="i-img" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" strokeWidth="1.6"/><circle cx="9" cy="10" r="1.8" fill="currentColor"/><path d="M4 18l5.5-5.5L14 17l3-3 3.5 3.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/></symbol>
+        {/* A camera, deliberately not `i-img`: that one is the floor's traced
+            reference bitmap, and these are photographs of real objects. Two
+            different things must not share a glyph. */}
+        <symbol id="i-cam" viewBox="0 0 24 24"><path d="M3 8.5h3.5L8 6h8l1.5 2.5H21v11H3z" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"/><circle cx="12" cy="14" r="3.6" fill="none" stroke="currentColor" strokeWidth="1.5"/></symbol>
         <symbol id="i-fit" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"/></symbol>
         <symbol id="i-zin" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" strokeWidth="1.7"/><path d="M11 8v6M8 11h6M16.5 16.5L21 21" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"/></symbol>
         <symbol id="i-zout" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" strokeWidth="1.7"/><path d="M8 11h6M16.5 16.5L21 21" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"/></symbol>

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createCanvas } from '@napi-rs/canvas';
 import {
-  blankProject, contentBBox, fmlToProject, makeItem, parseFundaSource, pointInPoly, polyArea, wallQuad,
+  blankProject, contentBBox, drawnBBox, fmlToProject, makeItem, parseFundaSource, pointInPoly, polyArea, wallQuad,
 } from '@engine/index';
 import { CATALOG, CAT_BY_KIND, heightOf } from '@engine/catalog';
 import {
@@ -149,7 +149,13 @@ describe('planFrame', () => {
   /** The fit maths as `renderFloorCanvas()` in src/shell/files.ts wrote it,
    *  transcribed. Every render's aspect ratio and scale comes out of these
    *  fifteen lines, so a silent drift here re-frames every picture the app has
-   *  ever produced without anything failing. */
+   *  ever produced without anything failing.
+   *
+   *  One deliberate divergence from the original: the frame bbox is `drawnBBox`,
+   *  not `contentBBox`. The original bounded every object by the circle it would
+   *  sweep if it spun, which framed a 6.2 m house as 8.3 m wide — see the comment
+   *  on `drawnBBox`. The block below asserts that difference rather than letting
+   *  this transcription hide it. */
   function legacy(f: Floor, opts: { clean?: boolean; measures?: boolean; maxPx?: number }) {
     let framed = f;
     if (opts.measures) {
@@ -165,7 +171,7 @@ describe('planFrame', () => {
         };
       }
     }
-    const b = contentBBox({
+    const b = drawnBBox({
       ...framed,
       notes: opts.clean ? [] : framed.notes,
       dims: opts.clean ? [] : framed.dims,
@@ -207,6 +213,43 @@ describe('planFrame', () => {
         expect(now.view.py).toBeCloseTo(was.py, 8);
       }
     }
+  });
+
+  /* The bug this replaced, asserted directly rather than through the
+     transcription above. A long thin object standing against a wall is the
+     normal case on a Dutch plan — a staircase, a bookshelf, a kitchen run — and
+     the swept-circle bound put half its length of blank paper outside the wall.
+     The image model does not leave blank paper alone: it filled the bands with
+     an invented title block and dimension chains, and drew the building at the
+     letterboxed aspect rather than its own. */
+  it('frames the plan to the ink, not to the circle an object would sweep', () => {
+    const p = blankProject('framing', false);
+    const f = p.floors[0];
+    /* an 800 × 1000 shell, with a 265 cm staircase upright against the east
+       wall — 80 cm deep, so it stands entirely inside the building */
+    const stair = makeItem('sofa3', { x: 760, y: 500 });
+    stair.w = 80; stair.h = 265;
+    f.items.push(stair);
+
+    const swept = contentBBox(f)!;
+    const drawn = drawnBBox(f)!;
+    /* the drawing stops at the east wall, where the ink stops */
+    expect(drawn.x1).toBe(800);
+    /* the sweep reaches most of a metre past it, outside the house */
+    expect(swept.x1).toBeCloseTo(898.4, 1);
+    expect(swept.x1 - drawn.x1).toBeGreaterThan(90);
+
+    /* and the frame is narrower for it — the same height, less blank paper */
+    const frame = planFrame(f, { clean: true, maxPx: 1800 })!;
+    const legacyFrame = (() => {
+      const b = swept;
+      const pad = 40;
+      const wCm = b.x1 - b.x0 + pad * 2, hCm = b.y1 - b.y0 + pad * 2;
+      const zoom = Math.min(1800 / Math.max(wCm, hCm), 6);
+      return { width: Math.round(wCm * zoom), height: Math.round(hCm * zoom) };
+    })();
+    expect(frame.width).toBeLessThan(legacyFrame.width);
+    expect(frame.height).toBe(legacyFrame.height);
   });
 
   it('defaults to an 1800 px reference, and frames nothing as nothing', () => {

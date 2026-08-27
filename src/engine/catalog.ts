@@ -41,6 +41,33 @@ const CHAIR_OFF = 22;
  *  from one place or the brief argues with its own reference image — which is
  *  how a "Round 6p" got rendered with eight. `render.test.ts` counts what the
  *  glyphs draw and fails if this drifts from it. */
+/** What to call a thing in a brief written for an image model, where the tray's
+ *  own label is jargon.
+ *
+ *  "Round 4p" is a good label on a 92 px tile next to a picture of a round table
+ *  with four chairs. It is close to meaningless as a written instruction, and a
+ *  render proved it: a "Round 4p" in the kitchen came back as a second sofa. The
+ *  brief needs the words a person would say out loud.
+ *
+ *  Only the entries whose name carries a number or a piece of shorthand are
+ *  here. Everything else — "L-shaped sofa", "Bookshelf", "Wardrobe" — already
+ *  reads as English and falls through unchanged. */
+export const BRIEF_NAME: Record<string, string> = {
+  sofa2: 'two-seat sofa',
+  sofa3: 'three-seat sofa',
+  dt4: 'dining table with four chairs',
+  dt6: 'dining table with six chairs',
+  dt8: 'dining table with eight chairs',
+  dtr: 'round dining table with six chairs',
+  dtr4: 'round dining table with four chairs',
+  ktable: 'round kitchen table with four chairs',
+  ktable2: 'small round kitchen table with two chairs',
+  bed90: 'single bed',
+  bed140: 'double bed',
+  bed160: 'queen-size bed',
+  bed180: 'king-size bed',
+};
+
 export const SEATS: Record<string, number> = {
   dt4: 4, dt6: 6, dt8: 8, dtr: 6, dtr4: 4, ktable: 4, ktable2: 2, gtable: 6,
 };

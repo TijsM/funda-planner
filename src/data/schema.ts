@@ -116,3 +116,22 @@ export const renderImagePath = (ownerId: string, renderId: string) =>
   `${ownerId}/${renderId}.png`;
 export const renderThumbPath = (ownerId: string, renderId: string) =>
   `${ownerId}/${renderId}.thumb.png`;
+
+/** The private bucket the object photographs live in — the pictures of real
+ *  furniture attached to items on a plan, not anything we generated. Separate
+ *  from `renders` because the two have nothing in common but being images: a
+ *  render is a costly output nobody may overwrite, a photo is an input the owner
+ *  replaces freely, and the mime lists and size limits differ. */
+export const PHOTO_BUCKET = 'photos';
+
+/** Owner first, then the PLAN's client id, then the photo's own id.
+ *
+ *  The owner segment is what the policies authorise on, exactly as above. The
+ *  plan segment is what makes deleting a plan's photos one prefix removal
+ *  instead of a query — and it is the client id (the `Project.id` in the
+ *  document) rather than the row uuid, because the browser holds that already
+ *  and a lookup here would be a round trip before every thumbnail. */
+export const photoPath = (ownerId: string, planClientId: string, photoId: string) =>
+  `${ownerId}/${planClientId}/${photoId}.jpg`;
+export const photoPrefix = (ownerId: string, planClientId: string) =>
+  `${ownerId}/${planClientId}`;

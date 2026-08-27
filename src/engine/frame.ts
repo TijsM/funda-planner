@@ -1,5 +1,5 @@
 import type { BBox, Floor, View } from './types';
-import { contentBBox } from './model';
+import { contentBBox, drawnBBox } from './model';
 
 /** Where a plan sits on a canvas, worked out from the geometry alone.
  *
@@ -62,8 +62,13 @@ export function planFrame(f: Floor, opts: FrameOpts = {}): Frame | null {
      a metre past the walls, which made the frame much wider than the building
      without making it taller. The plan then sat in a letterbox, and the
      generator filled the spare bands with an invented title block and captions
-     of its own. */
-  const b = contentBBox({
+     of its own.
+
+     `drawnBBox`, not `contentBBox`, for the second half of the same bug: the
+     latter bounds every object by the circle it would sweep if it spun, which
+     put a metre of blank paper either side of a plan whose longest objects stand
+     against its walls. See its comment for what the model did with that paper. */
+  const b = drawnBBox({
     ...framed,
     notes: opts.clean ? [] : framed.notes,
     dims: opts.clean ? [] : framed.dims,

@@ -3,6 +3,7 @@ import 'server-only';
 import { DEFAULT_PROVIDER, PROVIDER_META } from '@data/providers';
 import { flux2Flex, flux2Max } from './bfl';
 import { fluxGeneralCn, qwenEdit, zImageCn } from './fal';
+import { gptImage2, gptImageMini } from './openai';
 import type { Provider } from './types';
 
 /** Every provider the server can spend money at, by the id stored on a render
@@ -18,6 +19,8 @@ export const PROVIDERS: Record<string, Provider> = {
   [zImageCn.id]: zImageCn,
   [fluxGeneralCn.id]: fluxGeneralCn,
   [qwenEdit.id]: qwenEdit,
+  [gptImageMini.id]: gptImageMini,
+  [gptImage2.id]: gptImage2,
 };
 
 export { DEFAULT_PROVIDER, PROVIDER_META };

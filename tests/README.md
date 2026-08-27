@@ -23,14 +23,16 @@ Playwright, driving the real single-file app in Chrome.
 | `09-focus` | typing character by character in every field, so a component that remounts per keystroke cannot hide behind `fill()` |
 | `10-gate` | the gate, in both of the app's modes: with no Supabase credentials there is no gate at all and a page request lands on the editor; with credentials and no session a page request is redirected to `/login` carrying where it was headed, an API call gets a JSON 401 rather than a redirect a `fetch` cannot read, and the login screen asks for an email address |
 | `11-render` | generating a render against a stubbed provider: the elapsed run, the filmstrip, a reload, the one-credit-per-double-click guard, a failure kept as a retry, the seed field, and the three ways Generate is switched off |
+| `15-photos` | attaching a photograph of a real object: the file through the encoder (EXIF rotation, the downscale, a transparent cut-out matted rather than refused), a reference in the document and never the bytes, undo, a reload, the manage modal's reorder/note/delete, and the render panel's slot arithmetic — the tick, the image number, a control map renumbering them, and a provider that takes none |
 | `14-clipboard` | copy, duplicate and paste for everything on the plan — walls and their openings, rooms, notes, measures — the system clipboard as the carrier (a paste of somebody else's text left alone), and duplicating a whole floor tab |
 
-`10-gate` and `11-render` need a real server, so both skip themselves unless
-`E2E_TARGET=next`.
+`10-gate`, `11-render`, `13-shapes`, `14-clipboard` and `15-photos` need the v2
+shell, so they skip themselves unless `E2E_TARGET=next`.
 
 Unit tests are Vitest, run from the repo root with `pnpm test`: the geometry
-engine, the render store (against `fake-indexeddb`, under jsdom), the render job
-state machine, and the three pieces of the Supabase layer that are pure logic —
+engine, the render store and the photo store (both against `fake-indexeddb`,
+under jsdom), the render job state machine, which photographs get a reference
+slot and what the brief says about them, and the three pieces of the Supabase layer that are pure logic —
 `mode()` and its env parsing, the library merge's last-write-wins, and the sync's
 size guard and push interval (with the Supabase client mocked out).
 

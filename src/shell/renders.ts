@@ -2,6 +2,7 @@ import type { ViewKind } from '@engine/prompt';
 import type { ControlKind } from '@data/providers';
 import { ed } from '@state/store';
 import { isCloud } from '@data/config';
+import { UNAVAILABLE, done, errName, idb, walk } from './idb';
 import {
   cloudBytes, deleteCloudRender, deleteCloudRendersForPlan, listCloudRenders,
 } from '@data/cloudRenders';
@@ -42,8 +43,10 @@ export interface RenderSettings {
   dimensions: boolean;
   roomLabels: boolean;
   imgMeasures: boolean;
-  /** object names baked into the reference image. Absent on every record
-   *  written before it existed, and those were all rendered without them. */
+  /** Object numbers baked into the reference image. Written by records from the
+   *  window in which the picture carried numbered discs; kept as a fact about
+   *  how those renders were made, and read by nothing — the reference is
+   *  glyph-free now, on every setting. */
   imgLabels?: boolean;
   /** Which provider drew it — an id from `@data/providers`, and the one field
    *  here that is not a preference: it is what makes a render reproducible at
@@ -59,6 +62,16 @@ export interface RenderSettings {
   /** 0..1. Absent means the render predates the dial, which is the same picture
    *  as a provider that has no channel to turn. */
   controlScale?: number;
+  /** The object photographs that actually went, by photo id, in attach order:
+   *  `photos[0]` was image 2, `photos[1]` image 3, and so on after the plan.
+   *
+   *  A receipt, unlike `controls` above, which stores what was ticked. The
+   *  difference is that a ticked map is a preference — re-run this on another
+   *  provider and it should try to attach it again — while a photograph is a
+   *  specific picture: "which one of my sofas is in this render" has exactly one
+   *  answer, and it is this list. Absent on every record written before photos
+   *  existed, and every one of those was rendered without them. */
+  photos?: string[];
 }
 
 export interface RenderRecord {
@@ -99,99 +112,25 @@ export interface RenderRecord {
  *  icon and all. */
 export const succeeded = (rec: RenderRecord): boolean => rec.status === 'ready';
 
-/* Distinguishing "this browser refuses to open the database" from "the write
-   failed" decides which message the user gets, and only the open path knows. */
-const UNAVAILABLE = 'idb-unavailable';
+/* The connection, the transaction rules and the cursor walk live in `./idb.ts`
+   now — photos need the same seven hard-won details and a second copy of them is
+   a copy that keeps the fixes only until someone patches one of the two. */
+const store = idb({
+  name: IDB_NAME,
+  version: IDB_VERSION,
+  upgrade: (d, oldVersion) => {
+    if (oldVersion < 1) {
+      const os = d.createObjectStore(IDB_STORE, { keyPath: 'id' });
+      /* createdAt is part of the key so the floor query comes back ordered
+         out of the index, rather than sorted in memory after the fact */
+      os.createIndex(IDX_FLOOR, ['projectId', 'floorId', 'createdAt']);
+      os.createIndex(IDX_CREATED, 'createdAt');
+    }
+  },
+});
 
-let conn: Promise<IDBDatabase> | null = null;
-
-function open(): Promise<IDBDatabase> {
-  return new Promise<IDBDatabase>((resolve, reject) => {
-    let req: IDBOpenDBRequest;
-    /* Safari in a private window threw on the property access itself rather
-       than failing the open, so even reaching for indexedDB needs the guard. */
-    try {
-      if (typeof indexedDB === 'undefined') throw new Error(UNAVAILABLE);
-      req = indexedDB.open(IDB_NAME, IDB_VERSION);
-    } catch { reject(new Error(UNAVAILABLE)); return; }
-
-    req.onupgradeneeded = ev => {
-      const d = req.result;
-      /* branch on oldVersion rather than dropping and recreating — a v2 has to
-         migrate the renders already sitting here, not throw them away */
-      if (ev.oldVersion < 1) {
-        const os = d.createObjectStore(IDB_STORE, { keyPath: 'id' });
-        /* createdAt is part of the key so the floor query comes back ordered
-           out of the index, rather than sorted in memory after the fact */
-        os.createIndex(IDX_FLOOR, ['projectId', 'floorId', 'createdAt']);
-        os.createIndex(IDX_CREATED, 'createdAt');
-      }
-    };
-    req.onsuccess = () => {
-      const d = req.result;
-      /* another tab upgrading is blocked for as long as this handle is open */
-      d.onversionchange = () => { d.close(); conn = null; };
-      resolve(d);
-    };
-    req.onerror = () => reject(req.error ?? new Error(UNAVAILABLE));
-    req.onblocked = () => reject(new Error(UNAVAILABLE));
-  });
-}
-
-function db(): Promise<IDBDatabase> {
-  if (!conn) {
-    conn = open().catch(err => {
-      /* a rejected connection must not stay cached — one failed open would
-         otherwise poison every later call without ever retrying */
-      conn = null;
-      throw err;
-    });
-  }
-  return conn;
-}
-
-function done<T>(req: IDBRequest<T>): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error ?? new Error('IndexedDB request failed'));
-  });
-}
-
-async function reader(): Promise<IDBObjectStore> {
-  const d = await db();
-  return d.transaction(IDB_STORE, 'readonly').objectStore(IDB_STORE);
-}
-
-async function write(run: (s: IDBObjectStore) => void): Promise<void> {
-  const d = await db();
-  await new Promise<void>((resolve, reject) => {
-    const t = d.transaction(IDB_STORE, 'readwrite');
-    /* Resolve on the transaction, never on the put request: a full disk aborts
-       the transaction after the request has already reported success, so
-       resolving early would announce a save that never landed. */
-    t.oncomplete = () => resolve();
-    t.onabort = () => reject(t.error ?? new Error('IndexedDB transaction aborted'));
-    t.onerror = () => reject(t.error ?? new Error('IndexedDB transaction failed'));
-    run(t.objectStore(IDB_STORE));
-  });
-}
-
-/** Walks a cursor to exhaustion. Every continue() is issued from the success
- *  handler so nothing awaits mid-transaction, which would let it auto-close. */
-function walk(
-  req: IDBRequest<IDBCursorWithValue | null>,
-  each: (rec: RenderRecord, c: IDBCursorWithValue) => void,
-): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    req.onsuccess = () => {
-      const c = req.result;
-      if (!c) { resolve(); return; }
-      each(c.value as RenderRecord, c);
-      c.continue();
-    };
-    req.onerror = () => reject(req.error ?? new Error('IndexedDB cursor failed'));
-  });
-}
+const reader = () => store.reader(IDB_STORE);
+const write = (run: (s: IDBObjectStore) => void) => store.write(IDB_STORE, run);
 
 /* An array sorts after every number in IndexedDB's key ordering, so `[]` as the
    last element catches every createdAt without inventing a maximum timestamp —
@@ -201,12 +140,6 @@ const floorRange = (projectId: string, floorId: string) =>
   IDBKeyRange.bound([projectId, floorId], [projectId, floorId, []]);
 const projectRange = (projectId: string) =>
   IDBKeyRange.bound([projectId], [projectId, []]);
-
-function errName(err: unknown): string {
-  return typeof err === 'object' && err !== null && 'name' in err
-    ? String((err as { name: unknown }).name)
-    : '';
-}
 
 /* ── reads: never throw, never toast — an empty filmstrip is a survivable
       answer, and a modal that explodes on open is not ─────────────────────── */
@@ -241,7 +174,7 @@ export async function totalBytes(): Promise<number> {
   try {
     const s = await reader();
     let sum = 0;
-    await walk(s.openCursor(), r => { sum += bytesOf(r); });
+    await walk<RenderRecord>(s.openCursor(), r => { sum += bytesOf(r); });
     return sum;
   } catch { return 0; }
 }
@@ -349,20 +282,4 @@ export async function renderBlob(rec: RenderRecord): Promise<Blob | null> {
 
 /** Wipes the database. For tests and for the e2e `fresh()` helper — IndexedDB
  *  survives between Playwright runs, not just between tests. */
-export function deleteDatabase(): Promise<void> {
-  const handle = conn;
-  conn = null;
-  /* the delete blocks forever behind a live handle, so close ours first */
-  return Promise.resolve(handle)
-    .then(d => d?.close(), () => undefined)
-    .then(() => new Promise<void>(resolve => {
-      try {
-        const req = indexedDB.deleteDatabase(IDB_NAME);
-        /* resolve on every outcome including onblocked — a wipe that cannot run
-           must not hang a test run waiting for a tab that will never close */
-        req.onsuccess = () => resolve();
-        req.onerror = () => resolve();
-        req.onblocked = () => resolve();
-      } catch { resolve(); }
-    }));
-}
+export const deleteDatabase = (): Promise<void> => store.destroy();

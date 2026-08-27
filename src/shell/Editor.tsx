@@ -12,6 +12,7 @@ import { commitDraft, deleteSelection, duplicateSelection, nudge } from './comma
 import { clipOfCurrent, pasteClipText, pastePoint, rememberClip } from './clipboard';
 import { adoptUser, autosave, readAutosave, readIndex, readRendersBar, saveProject } from './storage';
 import { readImageFile, readJsonFile } from './files';
+import { sweepOrphans } from './photos';
 import { importFromUrl } from './funda';
 import { IconSprite } from './ui/Icons';
 import { TestBridge } from './TestBridge';
@@ -85,6 +86,20 @@ export function Editor() {
 
   /* fit once the first project lands */
   useEffect(() => { if (project) requestAnimationFrame(fit); }, [project?.id, fit]);
+
+  /* ── photos nothing points at any more ──────────────────────── */
+  /* Deleting an object deliberately leaves its photographs in storage, because
+     undo has to be able to bring the object back and a paste of the same
+     clipboard has to still find its bytes. This is the other half of that
+     bargain: once per plan opened, drop the ones no floor references and that
+     are older than a day, so nothing this session did can be swept while it is
+     still undoable. Silent and best effort — it frees space, it fixes nothing. */
+  useEffect(() => {
+    const p = project;
+    if (!p) return;
+    const t = setTimeout(() => { void sweepOrphans(p); }, 4000);
+    return () => clearTimeout(t);
+  }, [project?.id]);
 
   /* The renders sidebar takes ~290px off the canvas. Without a refit the plan
      stays where it was and slides under it. */

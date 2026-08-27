@@ -154,11 +154,20 @@ function forgetRenders(id: string) {
   void import('./renders').then(m => m.deleteRendersForProject(id)).catch(() => { /* ignore */ });
 }
 
+/* And its object photographs, for exactly the same reason: they are keyed by
+   plan and nothing outside that plan can ever show them again. In cloud mode
+   this reaches the bucket as well as the local cache — a photo left in Storage
+   is billed for and invisible. */
+function forgetPhotos(id: string) {
+  void import('./photos').then(m => m.deletePhotosForProject(id)).catch(() => { /* ignore */ });
+}
+
 export function deleteProject(id: string) {
   const k = key(LS_P + id);
   if (k) { try { localStorage.removeItem(k); } catch { /* ignore */ } }
   writeIndex(readIndex().filter(x => x.id !== id));
   forgetRenders(id);
+  forgetPhotos(id);
 }
 
 export function clearLibrary() {
@@ -166,6 +175,7 @@ export function clearLibrary() {
     const k = key(LS_P + x.id);
     if (k) { try { localStorage.removeItem(k); } catch { /* ignore */ } }
     forgetRenders(x.id);
+    forgetPhotos(x.id);
   });
   writeIndex([]);
 }
@@ -194,6 +204,10 @@ export function dropLocalCache() {
      account the way the localStorage keys are, so those are precisely the rows
      the next person to sign in on this browser would inherit. */
   void import('./renders').then(m => m.deleteDatabase()).catch(() => { /* ignore */ });
+  /* The photo cache goes the same way and for the same reason. In cloud mode
+     these are only cached copies — the account keeps the originals, and the next
+     person to sign in on this browser has no business holding either. */
+  void import('./photos').then(m => m.deletePhotoDatabase()).catch(() => { /* ignore */ });
 }
 
 /* ── autosave ───────────────────────────────────────────────────── */

@@ -495,6 +495,104 @@ textarea.src:focus{border-color:var(--vermilion)}
 .ctx-desc input:focus{border-color:var(--brass)}
 .ctx-desc input::placeholder{color:var(--tx-3)}
 
+/* the photo strip — the real object, as opposed to a description of it.
+   Wraps rather than scrolls: six thumbnails is the cap and a toolbar that grows
+   a scrollbar for them reads as though there were more hiding. */
+.ctx-photos{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:0 7px 5px}
+.ctx-photos>svg{width:15px;height:15px;color:var(--brass);flex:none}
+.ctx-photo{
+  width:34px;height:34px;padding:0;border-radius:5px;overflow:hidden;flex:none;
+  border:1px solid var(--line);background:var(--sunken);cursor:pointer;
+}
+.ctx-photo img{width:100%;height:100%;object-fit:cover;display:block}
+.ctx-photo i{
+  display:grid;place-items:center;width:100%;height:100%;background:var(--sunken);
+  font:700 13px/1 var(--mono);font-style:normal;color:var(--danger);
+}
+/* the bytes are on another device — an empty tile that never resolves reads as a
+   bug, and this is a true statement instead */
+.ctx-photo.gone{border-color:var(--danger);border-style:dashed}
+.ctx-photo:hover{border-color:var(--brass)}
+/* the one that goes when slots are short — ringed, not merely first */
+.ctx-photo.pri{border-color:var(--brass);box-shadow:0 0 0 1px var(--brass)}
+
+/* the object-photo list in the render panel: what goes, and as which image */
+.ai-photos{margin:8px 0 4px}
+.ai-photos-count{font:400 10.5px/1 var(--mono);color:var(--tx-2)}
+.ai-photo{
+  display:flex;align-items:center;gap:8px;padding:3px 4px;border-radius:5px;
+  cursor:pointer;transition:.12s var(--ease);
+}
+.ai-photo:hover{background:#ffffff0a}
+.ai-photo.off{opacity:.45}
+.ai-photo input{width:13px;height:13px;flex:none;accent-color:var(--brass)}
+.ai-photo-shot{width:26px;height:26px;border-radius:4px;overflow:hidden;flex:none;background:var(--sunken)}
+.ai-photo-shot img{width:100%;height:100%;object-fit:cover;display:block}
+.ai-photo-shot i{display:block;width:100%;height:100%}
+.ai-photo-what{flex:1;min-width:0;display:flex;align-items:baseline;gap:6px;overflow:hidden}
+.ai-photo-what b{font:500 11.5px/1.3 var(--sans);color:var(--tx);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ai-photo-what em{font:400 10px/1.3 var(--mono);color:var(--tx-3);font-style:normal;white-space:nowrap}
+.ai-photo-n{font:400 10px/1 var(--mono);color:var(--brass);flex:none}
+/* ticked and nothing left to send it in — the one state that needs explaining */
+.ai-photo.full .ai-photo-n{color:var(--tx-3)}
+.ai-photo.off .ai-photo-n{color:var(--tx-3)}
+/* the bytes are on another device — the render cannot send this one, and saying
+   so here is the difference between knowing and finding out at Generate */
+.ai-photo.gone{opacity:.7}
+.ai-photo.gone .ai-photo-n{color:var(--danger)}
+.ai-photo.gone .ai-photo-shot{border:1px dashed var(--danger)}
+
+/* ── managing the photos on one object ─────────────────────────────── */
+.modal.photos{max-width:780px}
+.photos-b{display:flex;flex-direction:column;gap:14px}
+.photos-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px}
+.photo-card{
+  display:flex;flex-direction:column;gap:7px;padding:8px;border-radius:7px;
+  border:1px solid var(--line);background:var(--sunken);
+}
+.photo-card.pri{border-color:var(--brass)}
+.photo-shot{position:relative;aspect-ratio:4/3;border-radius:5px;overflow:hidden;background:var(--paper)}
+.photo-shot img{width:100%;height:100%;object-fit:contain;display:block}
+.photo-shot i{
+  display:grid;place-items:center;width:100%;height:100%;
+  font:400 11px/1.4 var(--mono);font-style:normal;color:var(--tx-3);text-align:center;
+}
+.photo-badge{
+  position:absolute;left:6px;top:6px;padding:1px 6px;border-radius:4px;
+  background:var(--brass);color:#fff;font:600 10px/1.6 var(--sans);letter-spacing:.04em;
+}
+.photo-note{
+  height:27px;padding:0 8px;border-radius:5px;background:var(--paper);
+  border:1px solid var(--line);font:400 12px/1 var(--sans);color:var(--tx);
+}
+.photo-note:focus{border-color:var(--brass)}
+.photo-note::placeholder{color:var(--tx-3)}
+.photo-acts{display:flex;align-items:center;gap:2px;white-space:nowrap}
+/* smaller than a toolbar button: four of them plus a size have to fit a 210 px
+   card without wrapping "Make first" onto two lines */
+.photo-acts .cb{height:26px;min-width:26px;padding:0 6px;font-size:11px}
+.photo-acts .cb svg{width:14px;height:14px}
+.photo-acts .cb[disabled]{opacity:.3;pointer-events:none}
+.photo-acts em{font:400 10.5px/1 var(--sans);color:var(--tx-3);font-style:normal}
+.photo-acts .cb.warn:hover{color:var(--danger)}
+.photos-foot{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.photos-foot .btn{cursor:pointer}
+
+/* the style presets, on the surface. A datalist is a list nobody opens, and an
+   empty Style box is the single most common reason a render comes back with no
+   coherent material scheme at all. */
+.styles-row{align-items:flex-start;margin-top:5px;margin-bottom:9px}
+/* NOT a `.fld`: that box is 26 px tall with a border, and a wrapping row of
+   chips inside it overlaps the control below. */
+.styles{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
+.styles .chip{
+  padding:3px 9px;border-radius:11px;cursor:pointer;
+  border:1px solid var(--line);background:var(--sunken);color:var(--tx-2);
+  font:400 11px/1.5 var(--sans);
+}
+.styles .chip:hover{border-color:var(--brass);color:var(--tx)}
+.styles .chip.on{border-color:var(--brass);background:#C7A44E1F;color:var(--tx)}
+.styles em{font:400 11px/1.5 var(--sans);color:var(--tx-3);font-style:normal}
 /* ---------- image-generator export ---------- */
 
 /* ── drawing your own object ────────────────────────────────────────────
