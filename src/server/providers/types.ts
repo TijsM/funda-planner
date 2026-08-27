@@ -1,7 +1,7 @@
 import 'server-only';
 
 import {
-  MAX_USD_PER_IMAGE, affordableDims, estimateUsd,
+  MAX_USD_PER_IMAGE, affordableDims, ceilingUsd, estimateUsd,
   type ControlKind, type ProviderMeta,
 } from '@data/providers';
 
@@ -15,7 +15,7 @@ import {
  */
 
 export type { ControlKind, ProviderMeta };
-export { MAX_USD_PER_IMAGE, affordableDims, billedMegapixels, estimateUsd, maxAffordablePixels }
+export { MAX_USD_PER_IMAGE, affordableDims, billedMegapixels, ceilingUsd, estimateUsd, maxAffordablePixels }
   from '@data/providers';
 
 /** One conditioning map, raw base64 with no `data:` prefix — the same convention
@@ -25,11 +25,33 @@ export interface ControlImage {
   base64: string;
 }
 
+/** One photograph of a real object, raw base64 with no `data:` prefix — same
+ *  convention as the reference and the control maps.
+ *
+ *  A separate channel from `ControlImage` on purpose. A control map is geometry
+ *  we painted and the model may be told to obey; a photo is a thing in the world
+ *  that the model must reproduce the look of and nothing else. They are numbered
+ *  into the same reference slots and that is all they have in common — mixing
+ *  them into one array is how a depth ramp ends up described as a sofa. */
+export interface RefImage {
+  /** the photo id, for the submit log — never sent to the vendor */
+  id: string;
+  /** JPEG, per `PHOTO_MIME` in src/shell/photos.ts */
+  base64: string;
+  /** what it is a photograph of, e.g. "sofa (living room)". Used by the vendors
+   *  that can only be told in prose, and by the log line. */
+  label: string;
+}
+
 export interface GenerateArgs {
   prompt: string;
   /** the reference PNG, raw base64 */
   imageBase64: string;
   controls?: ControlImage[];
+  /** Photographs of objects on the plan, in the order the brief numbered them.
+   *  They take the reference slots BEFORE the control maps do — see
+   *  `references()` in bfl.ts for why that order and not the other one. */
+  refs?: RefImage[];
   width: number;
   height: number;
   seed: number | null;
@@ -110,7 +132,8 @@ const EPS = 1e-9;
 
 const money = (usd: number) => `$${usd < 0.01 ? usd.toFixed(4) : usd.toFixed(3)}`;
 
-/** Refuses any render that would cost more than `MAX_USD_PER_IMAGE`, and any
+/** Refuses any render that would cost more than the provider's ceiling — the
+ *  global `MAX_USD_PER_IMAGE` unless it states its own — and any
  *  render on a provider that publishes no price at all — an unpriced call cannot
  *  be shown to be under a ceiling, and "probably cheap" is not a budget.
  *
@@ -122,11 +145,11 @@ export function assertAffordable(p: ProviderMeta, width: number, height: number)
   if (usd === null) {
     throw new ProviderError(
       400,
-      `${p.label} publishes no price per image, so a render on it cannot be shown to cost less than the ${money(MAX_USD_PER_IMAGE)} ceiling. Pick a provider with a published rate.`,
+      `${p.label} publishes no price per image, so a render on it cannot be shown to cost less than the ${money(ceilingUsd(p))} ceiling. Pick a provider with a published rate.`,
       false,
     );
   }
-  if (usd <= MAX_USD_PER_IMAGE + EPS) return;
+  if (usd <= ceilingUsd(p) + EPS) return;
 
   const smaller = affordableDims(p, width, height);
   const room = smaller
@@ -135,7 +158,7 @@ export function assertAffordable(p: ProviderMeta, width: number, height: number)
   const mp = (width * height) / 1e6;
   throw new ProviderError(
     400,
-    `${width}×${height} is ${mp.toFixed(2)} megapixels, which on ${p.label} would cost about ${money(usd)} — over the ${money(MAX_USD_PER_IMAGE)} ceiling for a single image.${room}`,
+    `${width}×${height} is ${mp.toFixed(2)} megapixels, which on ${p.label} would cost about ${money(usd)} — over the ${money(ceilingUsd(p))} ceiling for a single image.${room}`,
     false,
   );
 }
@@ -250,6 +273,23 @@ const CONTROL_SAYS: Record<ControlKind, string> = {
   change: 'a mask of the same plan, white only where the image may differ from image 1',
 };
 
+/** Does this prompt already number an image past the plan?
+ *
+ *  The guard both legends below share, and it has to be this rather than a check
+ *  for a particular sentence. The app's brief writes its own legends and numbers
+ *  them off the same allocation the body builders use — so a second copy from
+ *  here is not merely redundant, it is WRONG: it would call the line map "image
+ *  2" while the body has a photograph of a sofa in slot 2, because photographs
+ *  take the slots first.
+ *
+ *  Image 1 does not count. Every app brief mentions it ("Match image 1 exactly")
+ *  including the ones with nothing else attached, and a caller whose prompt names
+ *  only the plan has said nothing about what else is in the request. From 2 up is
+ *  the honest test for "this prompt has already numbered the attachments". */
+function namesExtraImages(prompt: string): boolean {
+  return /\bimages?\s+[2-8]\b/i.test(prompt);
+}
+
 /** A sentence naming image 2, 3, … for a prompt. There is NO evidence FLUX.2
  *  reads a depth map handed to it this way — it has no control input and the
  *  docs say structure is interpreted semantically. It costs nothing to try,
@@ -266,7 +306,7 @@ const CONTROL_SAYS: Record<ControlKind, string> = {
  *  prompt that names more maps than its provider will attach is the caller's
  *  error, and one the shell's per-provider cap exists to prevent. */
 export function controlLegend(controls: readonly ControlImage[], prompt = ''): string {
-  if (!controls.length || /\bImage 2 is\b/.test(prompt)) return '';
+  if (!controls.length || namesExtraImages(prompt)) return '';
   const parts = controls.map((c, i) => `Image ${i + 2} is ${CONTROL_SAYS[c.kind]}`);
   return `Keep the exact spatial arrangement from image 1 — same composition, same positioning of elements. ${parts.join('. ')}.`;
 }
@@ -278,4 +318,37 @@ export function controlLegend(controls: readonly ControlImage[], prompt = ''): s
 export function usableControls(p: ProviderMeta, controls: readonly ControlImage[] | undefined): ControlImage[] {
   if (!controls?.length) return [];
   return controls.filter((c) => p.acceptsControls.includes(c.kind));
+}
+
+/** How many extra images this provider has room for beside the plan. Zero on
+ *  anything whose single image input is the plan itself. */
+export const spareSlots = (p: ProviderMeta): number => Math.max(0, p.maxReferences - 1);
+
+/** The photos this provider will actually be sent, in the caller's order.
+ *
+ *  Trimmed HERE as well as in the browser, and not because the browser cannot be
+ *  trusted to count: the eval harness calls providers directly, and a provider
+ *  handed nine photographs would otherwise put nine keys in a body whose schema
+ *  has seven — a 422 after the request has been paid for. The brief numbers the
+ *  photos it names, so a caller that oversends is a caller whose prompt is
+ *  already wrong; dropping the tail is the failure that costs the least. */
+export function usableRefs(
+  p: ProviderMeta, refs: readonly RefImage[] | undefined, takenByControls = 0,
+): RefImage[] {
+  if (!refs?.length) return [];
+  return refs.slice(0, Math.max(0, spareSlots(p) - takenByControls));
+}
+
+/** A sentence naming the photographs, for a caller whose prompt does not already
+ *  name them — which today means the eval harness. The app's own brief writes
+ *  these itself, front-loaded, because word order matters to BFL; see
+ *  `controlLegend` above, which makes the same bargain for control maps.
+ *
+ *  Every clause here is doing work. "Not scenes to copy" is what stops the
+ *  model reproducing the shop's showroom around the sofa; "ignore the
+ *  background" is what stops the wall behind it becoming the room's wall. */
+export function refLegend(refs: readonly RefImage[], from: number, prompt = ''): string {
+  if (!refs.length || namesExtraImages(prompt)) return '';
+  const parts = refs.map((r, i) => `image ${from + i} is the ${r.label}`);
+  return `The following are photographs of real objects to reproduce exactly — same design, colour and material — at the size and position image 1 draws them, not scenes to copy: ${parts.join(', ')}. Ignore their backgrounds, lighting and camera angles.`;
 }

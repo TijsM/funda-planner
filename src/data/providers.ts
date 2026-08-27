@@ -16,6 +16,16 @@
 
 export type ControlKind = 'line' | 'depth' | 'seg' | 'change';
 
+/** What an object photograph is encoded as, everywhere.
+ *
+ *  Here, in the file both halves of the server boundary already import, because
+ *  three places need to agree on it and none of them may import the others: the
+ *  browser encodes the JPEG (`src/shell/photos.ts`), the route sniffs the bytes
+ *  to prove they are one (`app/api/render/route.ts`), and fal has to declare it
+ *  in a data: URI (`src/server/providers/fal.ts`). A mime that disagrees across
+ *  those three is a 422 nobody can read. */
+export const PHOTO_MIME = 'image/jpeg';
+
 /** The same four at runtime, for a picker to list and a route to validate
  *  against. Written as the keys of a Record rather than as an array so the list
  *  and the union cannot drift: a kind added to `ControlKind` with no line here is
@@ -40,9 +50,31 @@ export interface ProviderMeta {
   /** null = the vendor publishes no price. Not "free": unknown. */
   usdPerMegapixel: number | null;
   flatUsdPerImage?: number | null;
+  /** This provider's own ceiling per image, when the global one is the wrong
+   *  number for it. Absent means `MAX_USD_PER_IMAGE`, which is what every
+   *  provider that sells output megapixels is held to.
+   *
+   *  It exists for the one model here that bills for its INPUT. A ceiling is a
+   *  promise about what one press of Generate may cost, and $0.10 was set when
+   *  every provider on the list priced the picture it drew. A model that charges
+   *  for the plan, and again for each photograph attached to it, cannot be
+   *  compared with those on the same number — so it carries its own, stated in
+   *  the picker beside its price rather than hidden in a constant. */
+  maxUsdPerImage?: number;
   /** empty = the model has no control channel at all and any map we send can
    *  only ride along as another semantic reference image */
   acceptsControls: ControlKind[];
+  /** How many reference images this model takes IN TOTAL, the plan included.
+   *
+   *  1 means there is exactly one slot and the plan is in it — nothing else can
+   *  be sent, so object photographs cannot reach that provider at all and the
+   *  panel says so rather than dropping them quietly.
+   *
+   *  It is a total rather than a count of spare slots because that is how the
+   *  vendors document it, and because the arithmetic that matters — what is left
+   *  after the plan and any semantic control maps — belongs in one place
+   *  (`attachedPhotos`) rather than in each of these numbers. */
+  maxReferences: number;
   maxOutputPixels: number;
   dimStep: number;
   minDim: number;
@@ -72,6 +104,7 @@ export interface ProviderMeta {
 const KEY_SOURCE: Record<string, string> = {
   FLUX_API_KEY: 'Create one at dashboard.bfl.ai and add it to .env as FLUX_API_KEY.',
   FAL_KEY: 'Create one at fal.ai/dashboard/keys and add it to .env as FAL_KEY.',
+  OPENAI_API_KEY: 'Create one at platform.openai.com/api-keys and add it to .env as OPENAI_API_KEY.',
 };
 
 export function missingEnvMessage(p: ProviderMeta): string {
@@ -108,6 +141,10 @@ export const PROVIDER_META: ProviderMeta[] = [
        interprets structure semantically." Maps we hand it go in the spare
        input_image_N slots and are read as pictures, not as geometry. */
     acceptsControls: [],
+    /* `input_image` plus `input_image_2 … _8` — api.bfl.ai/openapi.json, and the
+       reason object photographs are possible at all. Seven of these eight slots
+       were unused until photos landed. */
+    maxReferences: 8,
     maxOutputPixels: 4_000_000,
     dimStep: DIM_STEP,
     minDim: MIN_DIM,
@@ -116,13 +153,15 @@ export const PROVIDER_META: ProviderMeta[] = [
        to compare a quote with the ceiling; transcribed, not observed, so the
        comparison logs rather than refuses. */
     quoteUsdPerUnit: 0.01,
-    note: 'What ships today. Best prompt adherence, no control map, priciest per megapixel.',
+    note: 'What ships today. Best prompt adherence, eight reference slots, no control map, priciest per megapixel.',
   },
   {
     id: 'flux2-flex',
     label: 'FLUX.2 [flex]',
     usdPerMegapixel: 0.05,
     acceptsControls: [],
+    /* same request schema as [max] upstream — see the note there */
+    maxReferences: 8,
     maxOutputPixels: 4_000_000,
     dimStep: DIM_STEP,
     minDim: MIN_DIM,
@@ -141,6 +180,9 @@ export const PROVIDER_META: ProviderMeta[] = [
        render, which is the whole reason it is the rig the harness sweeps on. */
     usdPerMegapixel: 0.0065,
     acceptsControls: ['line', 'depth', 'seg'],
+    /* One, and it is not spare: on this endpoint `image_url` IS the control
+       image — there is no separate reference channel to put a photograph in. */
+    maxReferences: 1,
     maxOutputPixels: 4_000_000,
     dimStep: DIM_STEP,
     minDim: MIN_DIM,
@@ -166,6 +208,9 @@ export const PROVIDER_META: ProviderMeta[] = [
        caller's first usable kind and drops the rest. This list is what the picker
        may offer, never a promise that both go in the same call. */
     acceptsControls: ['line', 'depth'],
+    /* The reference goes in `image_url` and the map into `controlnets[0]`; there
+       is no third image input on this endpoint. */
+    maxReferences: 1,
     maxOutputPixels: 4_000_000,
     dimStep: DIM_STEP,
     minDim: MIN_DIM,
@@ -184,11 +229,109 @@ export const PROVIDER_META: ProviderMeta[] = [
     /* Multi-image editing, not control: extra maps arrive as more reference
        pictures in image_urls, the same deal FLUX.2 offers. */
     acceptsControls: [],
+    /* Three is OUR cap, not fal's — the docs state no maximum for `image_urls`
+       and only the worked example passes three. See `qwenBody` in
+       src/server/providers/fal.ts for why it is capped at all. */
+    maxReferences: 3,
     maxOutputPixels: 4_000_000,
     dimStep: DIM_STEP,
     minDim: MIN_DIM,
     needsEnv: 'FAL_KEY',
     note: 'Apache-2.0 weights, takes up to three reference images at once.',
+  },
+  {
+    id: 'openai-image-mini',
+    label: 'GPT Image 1 Mini',
+    /* THE ONLY PROVIDER HERE THAT DOES NOT SELL MEGAPIXELS. OpenAI prices images
+       in tokens — text in, image in, image out, at three different rates — so
+       there is no per-megapixel figure to put above and a flat price is the only
+       honest shape. `null` and not `0`: nothing about this is free, and
+       `estimateUsd` reads a null rate as "unpriced" and would refuse the render
+       outright if the flat price were missing too.
+
+       The flat figure is arithmetic, not a quote off a pricing page, so here is
+       the arithmetic. Rates per 1M tokens, from developers.openai.com's pricing
+       table on 2026-08-26: text in $2.00, image in $2.50, image out $8.00. Token
+       counts from their image guide, for the worst case this provider can be
+       handed:
+         output   1584 tokens (medium quality, 1024×1536 — the priciest of the
+                  three sizes the edits endpoint offers)          → $0.0127
+         input    4 images × 7853 tokens. Their rule for a high-fidelity input is
+                  "65 base, 129 per 512 px tile, plus 6240 for a non-square
+                  image", and 7853 is that for a 1800×1200 reference, which is
+                  REFERENCE_MAX_PX                                → $0.0785
+         prompt   2000 tokens, i.e. all of MAX_PROMPT_CHARS       → $0.0040
+                                                                    ------
+                                                                    $0.0952
+
+       That is a 5% margin under the ceiling on token counts nobody here has seen
+       a bill for, which is thin and is meant to be read as thin. `receipt()` in
+       src/server/providers/openai.ts logs what OpenAI actually metered on every
+       render, itemised, so the first one that goes through replaces this estimate
+       with a bill. */
+    usdPerMegapixel: null,
+    flatUsdPerImage: 0.095,
+    /* No control channel of any kind in the images API, so a map can only ride
+       along as another reference picture — the same deal FLUX.2 and Qwen offer,
+       and at $2.50 per 1M input tokens it is a deal with a price on it. */
+    acceptsControls: [],
+    /* The edits endpoint's documented cap on input images, one of which is
+       always the plan. Every one of them is billed, which is what makes this
+       number a budget rather than a capability. */
+    maxReferences: 4,
+    /* 1536×1024, the largest of the three sizes `/v1/images/edits` documents.
+       Not a rate limit but a hard menu: the endpoint takes 1024×1024, 1536×1024
+       and 1024×1536 and nothing else, so `nearestSize` in the server half maps
+       whatever aspect ratio the plan has onto the closest of the three. The step
+       and minimum below are therefore only about what this app's own route will
+       accept on the way in — they are not constraints OpenAI has. */
+    maxOutputPixels: 1_572_864,
+    dimStep: DIM_STEP,
+    minDim: MIN_DIM,
+    needsEnv: 'OPENAI_API_KEY',
+    note: 'Cheapest way to test the OpenAI flow, and it reads the plan at low fidelity — it refuses the high-fidelity setting outright, so fine lines get downsampled before it sees them. Bills for input images too. No seed, three fixed output sizes.',
+  },
+  {
+    id: 'openai-image-2',
+    label: 'GPT Image 2',
+    /* The same token pricing as the mini above and the same shape of estimate,
+       at rates that make it the most expensive render this app can ask for.
+       Per 1M tokens, from developers.openai.com's pricing table on 2026-08-26:
+       text in $5.00, image in $8.00, image out $30.00. Worst case, same token
+       counts as the mini's note:
+         output   1584 tokens (medium quality, 1024×1536)         → $0.0475
+         input    4 images × 7853 tokens                          → $0.2513
+         prompt   2000 tokens                                     → $0.0100
+                                                                    ------
+                                                                    $0.3088
+
+       The plan on its own — no photographs, no maps — is $0.120 of that, which
+       is already over the global $0.10 ceiling. That is the whole reason
+       `maxUsdPerImage` exists: this model cannot be held to a number that was
+       set when every provider on the list billed for the picture it drew and
+       nothing else. The ceiling below is the worst case rounded up, so a render
+       is refused only if the estimate is wrong, never because a photograph was
+       attached.
+
+       WHY IT IS HERE AT ALL, given the mini is a third of the price: the mini
+       rejects `input_fidelity: high` with a 400, so it reads our reference
+       downsampled — and the reference is a thin black line drawing whose whole
+       job is to say where the walls are. This model processes every input at
+       high fidelity and cannot be asked to do otherwise. Fidelity of the plan is
+       what we are paying the difference for. */
+    usdPerMegapixel: null,
+    flatUsdPerImage: 0.31,
+    /* The number one press of Generate may cost on this provider, stated rather
+       than inherited. Every photograph attached is another ~$0.06 of it, which
+       is why the panel prints the figure next to the model. */
+    maxUsdPerImage: 0.35,
+    acceptsControls: [],
+    maxReferences: 4,
+    maxOutputPixels: 1_572_864,
+    dimStep: DIM_STEP,
+    minDim: MIN_DIM,
+    needsEnv: 'OPENAI_API_KEY',
+    note: 'Reads the plan at full fidelity, which is what the mini cannot do. The dearest render here by a wide margin: it bills for every input image, so each photograph you attach costs about six cents on top. No seed, three fixed output sizes.',
   },
 ];
 
@@ -249,8 +392,14 @@ export function quotedUsdOf(p: ProviderMeta, quote: number | null | undefined): 
  *  found later in a bill, because it means `estimateUsd` is pricing the wrong
  *  thing (input megapixels, a surcharge, a plan rate) and every ceiling check
  *  since has been theatre. */
-export function overCeiling(quotedUsd: number | null | undefined): boolean {
-  return typeof quotedUsd === 'number' && quotedUsd > MAX_USD_PER_IMAGE + EPS;
+export function overCeiling(quotedUsd: number | null | undefined, p?: ProviderMeta): boolean {
+  return typeof quotedUsd === 'number' && quotedUsd > ceilingUsd(p) + EPS;
+}
+
+/** What one image on this provider is allowed to cost. The global ceiling unless
+ *  the provider states its own — see `ProviderMeta.maxUsdPerImage`. */
+export function ceilingUsd(p?: ProviderMeta | null): number {
+  return p?.maxUsdPerImage ?? MAX_USD_PER_IMAGE;
 }
 
 /** The largest output, in pixels, this provider can produce inside the ceiling.
@@ -258,7 +407,7 @@ export function overCeiling(quotedUsd: number | null | undefined): boolean {
  *  the honest answer for a provider that will not say what it charges. */
 export function maxAffordablePixels(p: ProviderMeta): number {
   const flat = p.flatUsdPerImage ?? null;
-  const budget = MAX_USD_PER_IMAGE - (flat ?? 0);
+  const budget = ceilingUsd(p) - (flat ?? 0);
   if (budget < -EPS) return 0;
 
   if (p.usdPerMegapixel === null) return flat === null ? 0 : p.maxOutputPixels;

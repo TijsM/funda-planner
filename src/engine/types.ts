@@ -20,6 +20,35 @@ export interface Opening {
 
 export interface Wall { id: string; a: Pt; b: Pt; t: number; openings: Opening[] }
 
+/** A photograph of the real thing, attached to an object so the render draws
+ *  that piece of furniture rather than a plausible one.
+ *
+ *  The BYTES ARE NOT HERE, and that is the whole design. `store.ts` stringifies
+ *  the entire Project into every undo snapshot, `Editor.tsx` autosaves it to
+ *  localStorage every three seconds and in cloud mode it is one jsonb column —
+ *  a single phone photo inlined here would blow the quota on the first stroke of
+ *  the wall tool. What lives in the document is this reference, about a hundred
+ *  bytes of it; the JPEG lives in `src/shell/photos.ts` under `id`, which is the
+ *  same split `src/shell/renders.ts` already makes for render PNGs and for the
+ *  same reason.
+ *
+ *  The consequence is stated where it bites: a photo does not travel inside a
+ *  JSON export, exactly as a render does not. */
+export interface PhotoRef {
+  /** the key the bytes are stored under — a `uid()`, unique across plans */
+  id: string;
+  /** the file it came from, so the manage list can say which one this is */
+  name?: string;
+  /** the size actually stored, after downscaling. Read by the render panel to
+   *  say how many megapixels the upload will be, which is a real ceiling. */
+  w: number; h: number;
+  bytes: number;
+  /** what this particular angle shows, when the object's own `desc` does not
+   *  cover it — "the back", "the oak legs". Feeds the brief beside the object. */
+  note?: string;
+  addedAt: number;
+}
+
 export interface Area {
   id: string;
   poly: Pt[];
@@ -28,6 +57,9 @@ export interface Area {
   /** free text the user wrote about this room; feeds the image-generator prompt.
    *  Absent by default — never invented from the catalogue or the listing. */
   desc?: string;
+  /** photographs of this room as it stands — the existing floor, the tiles.
+   *  Priority order: `[0]` is the one that goes when slots are short. */
+  photos?: PhotoRef[];
   /** label offset from the centroid */
   nx: number; ny: number;
   label: boolean;
@@ -66,6 +98,10 @@ export interface Item {
   /** free text the user wrote about this object; feeds the image-generator
    *  prompt. Absent by default — never seeded from the catalogue. */
   desc?: string;
+  /** photographs of the real object this one stands for — the sofa that was
+   *  actually bought, not a description of one. Priority order: `[0]` is the
+   *  one that goes when there are fewer reference slots than photos. */
+  photos?: PhotoRef[];
   /** the label was deliberately cleared — do not fall back to the catalogue name */
   noLabel?: 1;
   flip?: 0 | 1;

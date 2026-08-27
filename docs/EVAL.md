@@ -81,6 +81,19 @@ marginal unmapped-rooms case; `house-unnamed` names no rooms at all, so every si
 
 \* our own construction — see above.
 
+**The reference the sweep conditions on carries no lettering at all**, because the app's does not.
+This was settled twice and the second time cost a render. Object captions came first: 11 px of type
+whatever the canvas, which is 0.7% of an 1800 px reference and about a pixel and a half after the
+model's 8× downsample — the objects that failed were exactly the ones whose identity lived only in
+that lettering. They were replaced with numbered discs at 2% of the image, legible by construction,
+and the next render came back with nine black roundels painted onto its floor. There is no size at
+which our annotation is read as annotation: the picture is what gets copied, and everything on it is
+geometry. Identity moved into the brief's words — the OBJECTS table's `Where` column addresses a row
+by where it sits in its room. Two consequences for a sweep: the committed `eval/baseline.json`
+predates both changes, so the first run after this is a re-baseline and not a regression; and `text
+tokens` stays the metric to read on any A/B that touches the picture, because it is what catches ink
+of ours coming back drawn — the eight dimension labels, and the roundels after them.
+
 **Why `text` and `phash` carry no weight.** The lettering fraction runs 0.0001–0.01, so any weighted
 contribution is swamped noise, while *"three confident tokens came back"* is a clean yes/no answer to
 the A/B that metric exists to settle — read `text tokens`, not `text fraction`. And `phash` is a
@@ -182,7 +195,9 @@ route does read, and it is the one the research sweep turns.
 1. **The estimate is printed first** and nothing is submitted without `--yes`.
 2. **`--budget` (default $10)** refuses a sweep whose estimate exceeds it, so `--seeds 8` cannot
    quietly become a hundred dollars. The refusal names the flag to change.
-3. **The per-image ceiling** (`MAX_USD_PER_IMAGE`, $0.10, set by the product owner) is enforced here
+3. **The per-image ceiling** (`MAX_USD_PER_IMAGE`, $0.10, set by the product owner — or the
+   provider's own `maxUsdPerImage` where it states one, which today is GPT Image 2 at $0.35 because
+   it bills for its input images) is enforced here
    as well as in `assertAffordable` on the server, and output sizes are clamped to fit it. A provider
    that publishes **no** price is refused outright — an unpriced call cannot be shown to be under a
    ceiling.

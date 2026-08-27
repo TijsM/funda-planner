@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
-  DEFAULT_PROVIDER, MAX_USD_PER_IMAGE, PROVIDER_META, affordableDims, estimateUsd,
+  DEFAULT_PROVIDER, MAX_USD_PER_IMAGE, PROVIDER_META, affordableDims, ceilingUsd, estimateUsd,
   maxAffordablePixels, metaOf, type ProviderMeta,
 } from '@data/providers';
 import { flux2Flex, flux2Max, bflUrl } from '@server/providers/bfl';
 import { MISSING_FAL_KEY, falUrl, fluxGeneralCn, qwenEdit, zImageCn } from '@server/providers/fal';
+import { gptImageMini, nearestSize, openaiKeyedUrl } from '@server/providers/openai';
 import { PROVIDERS, ProviderError, providerOf } from '@server/providers';
 import { assertAffordable, type GenerateArgs, type Provider } from '@server/providers/types';
 
@@ -36,6 +37,7 @@ const withControls = (over: Partial<GenerateArgs> = {}): GenerateArgs => ({
 const realFetch = globalThis.fetch;
 const realFlux = process.env.FLUX_API_KEY;
 const realFal = process.env.FAL_KEY;
+const realOpenai = process.env.OPENAI_API_KEY;
 
 /** Every provider's submit answered with a plausible acceptance, so the body it
  *  built is readable without anything leaving the machine. */
@@ -68,17 +70,19 @@ beforeEach(() => {
   sent = [];
   process.env.FLUX_API_KEY = 'test-flux-key';
   process.env.FAL_KEY = 'test-fal-key';
+  process.env.OPENAI_API_KEY = 'test-openai-key';
 });
 
 afterEach(() => {
   globalThis.fetch = realFetch;
   if (realFlux === undefined) delete process.env.FLUX_API_KEY; else process.env.FLUX_API_KEY = realFlux;
   if (realFal === undefined) delete process.env.FAL_KEY; else process.env.FAL_KEY = realFal;
+  if (realOpenai === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = realOpenai;
 });
 
 /* ── the spending ceiling ─────────────────────────────────────────── */
 
-describe('the $0.10 ceiling', () => {
+describe('the spending ceiling', () => {
   /* The ceiling used to be a sentence in a brief. A render at 1800×1800 on [max]
      is $0.23 and nothing in the codebase would have stopped it. */
   it('prices a render by the output megapixels the vendor bills for', () => {
@@ -90,10 +94,26 @@ describe('the $0.10 ceiling', () => {
 
   it('lets the size the app actually asks for through on every provider', async () => {
     /* 1 MP is what outputDims() aims at in src/state/renders.ts. If the ceiling
-       refused that, this whole layer would be unusable on the day it landed. */
+       refused that, this whole layer would be unusable on the day it landed.
+       Against each provider's OWN ceiling: GPT Image 2 bills for the plan it is
+       handed as well as the picture it draws, so a dime cannot be the number it
+       is held to — see `ProviderMeta.maxUsdPerImage`. */
     for (const p of PROVIDER_META) {
-      expect(estimateUsd(p, 960, 960)).toBeLessThanOrEqual(MAX_USD_PER_IMAGE);
+      expect(estimateUsd(p, 960, 960), p.id).toBeLessThanOrEqual(ceilingUsd(p));
     }
+  });
+
+  /* A ceiling of its own is a licence to spend more, so it is worth one test
+     that it is not handed out casually: only the token-billed model has one, and
+     everything that sells output megapixels is still held to the dime. */
+  it('keeps every megapixel-priced provider on the global ceiling', () => {
+    for (const p of PROVIDER_META) {
+      if (p.usdPerMegapixel !== null) expect(ceilingUsd(p), p.id).toBe(MAX_USD_PER_IMAGE);
+    }
+    expect(ceilingUsd(metaOf('openai-image-2'))).toBeGreaterThan(MAX_USD_PER_IMAGE);
+    /* and it is not open-ended: the worst case the arithmetic in providers.ts
+       spells out, rounded up, and nothing beyond it */
+    expect(ceilingUsd(metaOf('openai-image-2'))).toBeLessThanOrEqual(0.35);
   });
 
   it('refuses a render that would cost more than a dime, naming both numbers', async () => {
@@ -142,7 +162,7 @@ describe('the $0.10 ceiling', () => {
       /* The boundary itself must be affordable — an off-by-one here is a size the
          picker offers and the route then refuses. */
       const side = Math.floor(Math.sqrt(budget));
-      expect(estimateUsd(p, side, side)).toBeLessThanOrEqual(MAX_USD_PER_IMAGE + 1e-9);
+      expect(estimateUsd(p, side, side), p.id).toBeLessThanOrEqual(ceilingUsd(p) + 1e-9);
     }
   });
 
@@ -276,6 +296,45 @@ describe('the request bodies', () => {
     expect(said).toBe(brief);
     expect(said.match(/Image 2 is/g)).toHaveLength(1);
     expect(said.match(/Keep the exact spatial arrangement/g)).toHaveLength(1);
+  });
+
+  /* The renumbering bug this guard exists for: photographs take the reference
+     slots before the maps, so with a photo attached the app's brief calls the
+     line map "image 3" — and a legend appended from here would call it image 2,
+     which by then holds a photograph of a sofa. Two sentences disagreeing about
+     what image 2 is, is worse than either alone. */
+  it('leaves a brief alone when photographs have moved the map numbering', async () => {
+    accept(BFL_OK);
+    const brief = 'Keep the exact spatial arrangement from image 1 — same composition, same'
+      + ' positioning of elements.\nImage 2 is a photograph of objects on this plan, not scenes.'
+      + '\nImage 2: sofa, living room.\nImage 3 is a line drawing of this plan. Do not render it.';
+    await flux2Max.submit({
+      ...withControls({ prompt: brief }),
+      controls: [{ kind: 'line', base64: 'TElORQ==' }],
+      refs: [{ id: 'p1', base64: 'U09GQQ==', label: 'sofa (living room)' }],
+    });
+    const b = bodyOf();
+    /* the photograph is in slot 2 and the map behind it, exactly as the brief says */
+    expect(b.input_image_2).toBe('U09GQQ==');
+    expect(b.input_image_3).toBe('TElORQ==');
+    /* and nothing was appended */
+    expect(String(b.prompt)).toBe(brief);
+  });
+
+  it('names the photographs for a caller whose prompt does not, like the harness', async () => {
+    accept(BFL_OK);
+    await flux2Max.submit({
+      ...ARGS,
+      prompt: 'A photorealistic top-down view.',
+      refs: [
+        { id: 'p1', base64: 'U09GQQ==', label: 'sofa (living room)' },
+        { id: 'p2', base64: 'QkVE', label: 'bed (bedroom)' },
+      ],
+    });
+    const said = String(bodyOf().prompt);
+    expect(said).toContain('photographs of real objects to reproduce exactly');
+    expect(said).toContain('image 2 is the sofa (living room)');
+    expect(said).toContain('image 3 is the bed (bedroom)');
   });
 
   it('never lets a detector between our control map and z-image', async () => {
@@ -455,8 +514,11 @@ describe('the missing key', () => {
     /* There is no FAL_KEY in this deployment at all, so this is the message every
        fal path really produces. A generic "not configured" would send whoever
        hits it looking through three files. */
-    delete process.env.FLUX_API_KEY;
-    delete process.env.FAL_KEY;
+    /* Every provider's own variable, read off the registry rather than named
+       here: a list of two was a list that silently stopped covering the third
+       provider added after it, and the one it stopped covering was the one whose
+       submit then ran for real. */
+    for (const p of Object.values(PROVIDERS)) delete process.env[p.needsEnv];
     accept(BFL_OK);
 
     for (const p of Object.values(PROVIDERS)) {
@@ -610,5 +672,249 @@ describe('polling fal', () => {
     const r = await zImageCn.poll(FAL_OK.status_url);
     expect(r.status).toBe('failed');
     expect(r.status === 'failed' && r.retryable).toBe(false);
+  });
+});
+
+/* ── OpenAI: synchronous, and billed for what it is shown ─────────── */
+
+/** OpenAI's images endpoint answers with the finished PNG rather than a job, so
+ *  `submit` starts the request without awaiting it and `poll` reads it out of a
+ *  map in this process. Everything below is about that seam: a poll before the
+ *  render lands, a poll after it lands, and a poll for a render this process is
+ *  not holding — which is the honest failure of the design and has to say so.
+ */
+const OPENAI_PNG = 'iVBORw0KGgo=';
+
+const OPENAI_OK = {
+  data: [{ b64_json: OPENAI_PNG }],
+  size: '1024x1024',
+  quality: 'medium',
+  output_format: 'png',
+  usage: {
+    input_tokens: 7900,
+    input_tokens_details: { image_tokens: 7853, text_tokens: 47 },
+    output_tokens: 1056,
+    total_tokens: 8956,
+  },
+};
+
+/** The submitted request is in flight on a promise nobody awaits, so a test that
+ *  wants the result has to let the microtask queue drain first. Polls rather than
+ *  sleeps: a fixed delay is either flaky or slow, and this is neither. */
+async function settled(provider: Provider, pollUrl: string, tries = 50) {
+  for (let i = 0; i < tries; i++) {
+    const r = await provider.poll(pollUrl);
+    if (r.status !== 'pending') return r;
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+  throw new Error('the render never left pending');
+}
+
+/** The parts of a multipart body, which `bodyOf` cannot read — OpenAI is the one
+ *  provider here that does not post JSON. */
+function formOf(i = 0): FormData {
+  const body = sent[i].init.body;
+  if (!(body instanceof FormData)) throw new Error('expected a multipart body');
+  return body;
+}
+
+describe('the OpenAI provider', () => {
+  it('offers only the three sizes the edits endpoint documents, nearest by aspect', () => {
+    /* The app asks for a size derived from the plan's own proportions and this
+       endpoint has a menu of three, so the mapping is the whole of the sizing
+       logic. Compared in log space, so a 3:2 plan and a 2:3 plan each land on
+       their own orientation rather than both collapsing to the first match. */
+    expect(nearestSize(960, 960)).toEqual({ width: 1024, height: 1024 });
+    expect(nearestSize(1440, 960)).toEqual({ width: 1536, height: 1024 });
+    expect(nearestSize(960, 1440)).toEqual({ width: 1024, height: 1536 });
+    /* A long thin plan has no faithful size here; the nearest of three is still
+       the right answer, and it must be the one in the same orientation. */
+    expect(nearestSize(1800, 400)).toEqual({ width: 1536, height: 1024 });
+    expect(nearestSize(400, 1800)).toEqual({ width: 1024, height: 1536 });
+  });
+
+  it('posts the plan as multipart with the price levers pinned', async () => {
+    accept(OPENAI_OK);
+    const job = await gptImageMini.submit(ARGS);
+    await settled(gptImageMini, job.pollUrl);
+
+    expect(sent[0].url).toBe('https://api.openai.com/v1/images/edits');
+    expect((sent[0].init.headers as Record<string, string>).authorization).toBe('Bearer test-openai-key');
+
+    const form = formOf();
+    expect(form.get('model')).toBe('gpt-image-1-mini');
+    /* Every one of these is a price. `quality` moves the output token count
+       sixteenfold, `n` is what the ceiling was checked against, and `size` left
+       at `auto` would let the vendor pick the bill. */
+    expect(form.get('quality')).toBe('medium');
+    expect(form.get('n')).toBe('1');
+    /* `input_fidelity` is NOT sent, on either model. The mini answers a real
+       request carrying it with 400 "input_fidelity high is not supported for
+       gpt-image-1-mini", and gpt-image-2 reads every input at high fidelity with
+       no way to ask. Sending it costs a render before a pixel is drawn. */
+    expect(form.get('input_fidelity')).toBeNull();
+    expect(form.get('size')).toBe('1024x1024');
+    expect(form.get('output_format')).toBe('png');
+    /* An interior render is not a cutout, and `auto` may answer transparent. */
+    expect(form.get('background')).toBe('opaque');
+
+    /* The plan is image 1 because every brief and every legend numbers it that
+       way, and there is nothing else on this request. */
+    expect(form.getAll('image[]')).toHaveLength(1);
+  });
+
+  it('puts the photographs after the plan and names them, in slot order', async () => {
+    accept(OPENAI_OK);
+    const job = await gptImageMini.submit({
+      ...ARGS,
+      prompt: 'A photorealistic top-down view.',
+      refs: [
+        { id: 'p1', base64: 'U09GQQ==', label: 'sofa (living room)' },
+        { id: 'p2', base64: 'QkVE', label: 'bed (bedroom)' },
+      ],
+    });
+    await settled(gptImageMini, job.pollUrl);
+
+    const form = formOf();
+    /* Plan first, then the photographs in the order the brief numbered them —
+       the same allocation bfl.ts and fal.ts make, because the legend below is
+       numbered off it. */
+    expect(form.getAll('image[]')).toHaveLength(3);
+    const said = String(form.get('prompt'));
+    expect(said).toContain('image 2 is the sofa (living room)');
+    expect(said).toContain('image 3 is the bed (bedroom)');
+  });
+
+  it('never sends more input images than the provider is priced for', async () => {
+    /* Every input image is billed here, so `maxReferences` is a budget rather
+       than a capability: the flat price covers four images and a fifth would be
+       a render that costs more than the ceiling approved. */
+    accept(OPENAI_OK);
+    const job = await gptImageMini.submit({
+      ...ARGS,
+      refs: Array.from({ length: 9 }, (_, i) => ({ id: `p${i}`, base64: 'U09GQQ==', label: `thing ${i}` })),
+    });
+    await settled(gptImageMini, job.pollUrl);
+    expect(formOf().getAll('image[]')).toHaveLength(metaOf('openai-image-mini').maxReferences);
+  });
+
+  it('answers pending until the render lands, then hands back the bytes', async () => {
+    /* The seam. `submit` returns before the render exists, so the first poll must
+       not report a failure and must not block. */
+    let release: (r: Response) => void = () => {};
+    globalThis.fetch = ((input: unknown, init: RequestInit = {}) => {
+      sent.push({ url: String(input), init });
+      return new Promise<Response>((resolve) => { release = resolve; });
+    }) as unknown as typeof fetch;
+
+    const job = await gptImageMini.submit(ARGS);
+    expect(job.pollUrl).toContain('https://api.openai.com/');
+    /* Nothing is quoted at submit: the render has not run, and OpenAI meters it
+       afterwards. The estimate stands alone. */
+    expect(job.cost).toBeNull();
+    expect(job.usd).toBeCloseTo(0.095, 6);
+    expect(await gptImageMini.poll(job.pollUrl)).toEqual({ status: 'pending', progress: null });
+
+    release(new Response(JSON.stringify(OPENAI_OK), { status: 200, headers: { 'content-type': 'application/json' } }));
+    const done = await settled(gptImageMini, job.pollUrl);
+    expect(done.status).toBe('ready');
+    if (done.status !== 'ready') return;
+    expect(done.imageUrl).toBe(`data:image/png;base64,${OPENAI_PNG}`);
+    /* Dollars, itemised from the usage OpenAI reports — the only real receipt any
+       provider on this list produces. 47 text tokens at $2/1M, 7853 image tokens
+       at $2.50/1M, 1056 output tokens at $8/1M. */
+    expect(done.cost).toBeCloseTo(47 * 2e-6 + 7853 * 2.5e-6 + 1056 * 8e-6, 9);
+  });
+
+  it('forgets a collected render rather than serving it twice', async () => {
+    /* The held image is megabytes of base64 and the status route has just written
+       it somewhere durable. A second poll is a client double-asking. */
+    accept(OPENAI_OK);
+    const job = await gptImageMini.submit(ARGS);
+    expect((await settled(gptImageMini, job.pollUrl)).status).toBe('ready');
+
+    const again = await gptImageMini.poll(job.pollUrl);
+    expect(again.status).toBe('failed');
+    expect(again.status === 'failed' && again.error).toContain('no longer holding it');
+  });
+
+  it('says why a render this process never held cannot be collected', async () => {
+    /* The honest failure of holding the render in memory: a restart or a second
+       instance loses a render that has been paid for, and the message has to name
+       that rather than read as a bad plan or a bad prompt. */
+    const r = await gptImageMini.poll('https://api.openai.com/v1/images/edits?held=openai-nope');
+    expect(r.status).toBe('failed');
+    expect(r.status === 'failed' && r.error).toContain('The credit is spent');
+    expect(r.status === 'failed' && r.retryable).toBe(false);
+  });
+
+  it('treats an exhausted balance as terminal, not as a rate limit', async () => {
+    /* The one path here that has been run against the live API: an account with
+       no credits answers HTTP 429 with code `credit_balance_exhausted`. Mapped
+       the obvious way — 429, try again — the client polls for its full three
+       minutes and then reports a timeout, for a request that was refused in two
+       seconds and will be refused until somebody pays. */
+    accept({
+      error: {
+        message: 'You have no credits remaining. Add credits to continue using the API.',
+        type: 'insufficient_quota',
+        code: 'credit_balance_exhausted',
+      },
+    }, 429);
+    const job = await gptImageMini.submit(ARGS);
+    const r = await settled(gptImageMini, job.pollUrl);
+    expect(r.status).toBe('failed');
+    if (r.status !== 'failed') return;
+    expect(r.retryable).toBe(false);
+    expect(r.error).toContain('Out of credit at OpenAI');
+    expect(r.error).toContain('billing');
+  });
+
+  it('still treats a real rate limit as worth retrying', async () => {
+    accept({ error: { message: 'Rate limit reached', type: 'requests', code: 'rate_limit_exceeded' } }, 429);
+    const job = await gptImageMini.submit(ARGS);
+    const r = await settled(gptImageMini, job.pollUrl);
+    expect(r.status === 'failed' && r.retryable).toBe(true);
+  });
+
+  it('keeps the API key off any host that only looks like OpenAI', () => {
+    expect(openaiKeyedUrl('https://api.openai.com/v1/images/edits?held=x')).toBeTruthy();
+    /* `endsWith('openai.com')` — the obvious spelling — accepts the first two of
+       these, and both are domains anybody can buy. */
+    expect(openaiKeyedUrl('https://evilopenai.com/v1/images/edits')).toBeNull();
+    expect(openaiKeyedUrl('https://api.openai.com.evil.test/v1')).toBeNull();
+    expect(openaiKeyedUrl('http://api.openai.com/v1/images/edits')).toBeNull();
+    expect(openaiKeyedUrl('not a url')).toBeNull();
+  });
+
+  it('decodes the finished render itself and refuses anything that is not one', async () => {
+    /* There is no delivery host: the bytes arrived in the submit response, so the
+       status route's download path is served from memory. The guard matches the
+       WHOLE string rather than the prefix, because "starts with data:image" also
+       accepts an SVG carrying script. */
+    const uri = `data:image/png;base64,${OPENAI_PNG}`;
+    const src = gptImageMini.deliveryUrl(uri)!;
+    expect(src).toBeTruthy();
+    const res = await gptImageMini.fetchDelivery(src);
+    expect(res.headers.get('content-type')).toBe('image/png');
+    expect(Buffer.from(await res.arrayBuffer()).equals(Buffer.from(OPENAI_PNG, 'base64'))).toBe(true);
+
+    expect(gptImageMini.deliveryUrl('data:image/svg+xml;base64,PHN2Zz4=')).toBeNull();
+    expect(gptImageMini.deliveryUrl('https://api.openai.com/v1/images/edits')).toBeNull();
+    expect(gptImageMini.deliveryUrl(`data:image/png;base64,${OPENAI_PNG} <script>`)).toBeNull();
+  });
+
+  it('does not read a null megapixel rate as free', async () => {
+    /* Flat-priced, which is the shape no other provider here uses: the megapixel
+       rate is null and `estimateUsd` must answer the flat price rather than zero
+       — the bug that would make the one provider with no per-megapixel figure
+       look like the cheapest thing on the list at any size. */
+    expect(estimateUsd(metaOf('openai-image-mini'), 4000, 4000)).toBeCloseTo(0.095, 6);
+    expect(estimateUsd(metaOf('openai-image-mini'), 64, 64)).toBeCloseTo(0.095, 6);
+
+    accept(OPENAI_OK);
+    const job = await gptImageMini.submit(ARGS);
+    await settled(gptImageMini, job.pollUrl);
+    expect(sent).toHaveLength(1);
   });
 });

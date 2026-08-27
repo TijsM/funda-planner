@@ -97,17 +97,26 @@ layer toggles, floor management. The choice is remembered.
   constraints, then a LOCKED block: the floor and its footprint, every named room with its area and
   where it sits on the plan as a table, every object on its own row as another, which sides the
   windows are on (so the light comes from the right direction), and explicit instructions not to
-  invent walls or rooms. Where an object sits is left to the drawing: position stated in prose is
-  measurably unreliable, and it is pixel-exact on the reference image. Four viewpoints (top-down,
+  invent walls or rooms. Every object row carries where it sits in its own room — not to place it,
+  which the drawing does pixel-exactly, but to say which of that room's blocks the row is about. Four viewpoints (top-down,
   eye level, isometric, watercolour sketch) rewrite it; you can scope it to a single room, add your own style line, and
   edit the text before copying. The street address is deliberately not in it: it steers nothing in
   an image and pulls the model towards whatever real building it half-remembers.
 - **A clean reference image** to attach — the plan with no grid, no dimension lines, no notes and no
-  UI, so the model copies the layout instead of the drawing furniture. Object names *are* on it by
-  default: the prompt can say where the staircase is, but the picture is what gets copied, and an
-  unnamed block on it becomes whatever the model decides. The brief tells the model those captions
-  are a key to read rather than lettering to draw. Lettering can still bleed into a render, so it is
-  a toggle — as are room names and measurements, both off by default for that reason.
+  UI, so the model copies the layout instead of the drawing furniture. Nothing on it is written:
+  every object is named in the prompt instead, in the OBJECTS table, with where it sits in its room.
+
+  That is not a stylistic choice, it is the second half of a lesson that cost two renders. Captions
+  came first, and they were unreadable: about 12 px on the 1800 px reference, 0.7% of the image, seen
+  through an image model's 8× downsample as a pixel and a half of grey. The objects that came back
+  wrong were exactly the ones whose identity lived only in that lettering — a fireplace as a cabinet,
+  two oak vitrines as a white bookcase. So they were replaced with numbered discs at 2% of the image,
+  legible by construction, and the next render came back with nine black roundels painted onto the
+  floor. There is no size at which our annotation is read as annotation: the picture is the thing
+  being copied, and everything on it is geometry. Words are the only channel with no bleed at all —
+  the worst a wrong phrase can do is describe the wrong sofa, and the drawing still says where the
+  sofa is. Room names and measurements on the image stay as toggles, both off by default, for the
+  same reason.
 
 Copy either to the clipboard, or download the image.
 
@@ -136,6 +145,46 @@ A described object is listed even when it is a fitted unit imported from the lis
 otherwise skipped as noise. Object descriptions follow the *List the furniture* toggle; room
 descriptions are always included.
 
+### Photos of the real thing
+
+Words cannot specify furniture you have already chosen. So every object and every room also takes
+**photographs** — select something and the strip under the description takes as many as six: the
+shop's picture, your own snap in the showroom, the swatch. They are sent with the render as
+additional reference images, and the brief names each one as the object it shows:
+
+```
+Images 2-3 are photographs of objects on this plan, not scenes. Reproduce each pictured object
+exactly — same design, colour, material — where image 1 draws it. Ignore their backgrounds,
+lighting and camera angle.
+Image 2: sofa 3-seat, woonkamer.
+Image 3: kitchen island, keuken (the oak front).
+```
+
+Each sentence quotes the object's number on the plan (`Image 2: #6 sofa 3-seat, living room`), which
+is the only part of it the model can locate in the picture — the name and the room corroborate. And
+what the sentence *asks for* depends on the camera: a photograph is taken at eye level, so from
+above only its colour, material and finish can carry, while an eye-level render can reproduce the
+piece itself. Promising the same thing either way is how a photograph of a white shaker kitchen came
+back as dark grey marble.
+
+Two things are worth knowing before you photograph the whole house:
+
+- **There are only so many slots.** FLUX.2 takes eight reference images and the plan is one of them,
+  so seven photographs go per render — fewer if you also tick a map, because they share the same
+  inputs. Qwen takes two; the two ControlNet providers take none at all and the panel says so. The
+  render panel lists every photographed object in scope with a tick and the image number it will be,
+  so what is going and what is not is on screen before you spend anything. Every ticked object sends
+  its first photo before any object sends a second — coverage first, extra angles with what is left —
+  and rendering one room at a time is how you reach the rest of the house.
+- **Photos are not in the JSON export.** Like renders, they live in the account (a private Storage
+  bucket, owner-scoped) and in this browser, keyed per plan. A plan file mailed to someone carries
+  the references but not the pictures.
+
+The document never holds image data: a `PhotoRef` is about a hundred bytes and the JPEG lives
+outside it, because the plan is stringified into every undo snapshot and autosaved every three
+seconds. Whatever you drop in is rotated by its EXIF, matted onto white if it has transparency, and
+re-encoded to a 1024 px JPEG — which is the size the render request can actually afford to send.
+
 ### The render itself
 
 The Next build renders the plan for you rather than handing you a brief to carry elsewhere. What
@@ -161,6 +210,13 @@ the size is aimed under it, the route refuses a request over it, and a provider 
 price at all is refused outright — an unpriced call cannot be shown to be under a ceiling. One
 provider bills whole megapixels rounded up, which limits it to exactly 1 MP; the picker says so
 rather than letting it arrive as a 400.
+
+One model is held to a different number, and states it: GPT Image 2 bills for the images it is
+*handed* as well as the one it draws, so the plan alone is $0.12 before a photograph is attached and
+a dime is not a number it can be compared on. It carries its own ceiling of $0.35 — the worst case
+the arithmetic in `src/data/providers.ts` spells out, rounded up — and the panel prints the price and
+that ceiling side by side above Generate. Every provider that sells output megapixels is still held
+to the $0.10, and a test asserts that a private ceiling is not handed out to any of them.
 
 Whether any of this actually holds a layout is measured, not eyeballed — see
 [`docs/EVAL.md`](docs/EVAL.md) and `pnpm eval`.
@@ -225,9 +281,9 @@ test against the real services so an upstream change is caught rather than hidde
 index.html                the standalone editor, one file, no build
 src/engine/               the geometry, catalog, renderer and prompt — no DOM, no React
 src/shell/                the React shell around it, and browser storage
-src/data/  src/server/    Supabase: config, schema, plan sync, renders
+src/data/  src/server/    Supabase: config, schema, plan sync, renders, object photos
 app/                      Next routes: the editor, /login, /api/render
-supabase/migrations/      the database, RLS policies and the render bucket
+supabase/migrations/      the database, RLS policies, the render and photo buckets
 tests/                    Playwright suite + fixtures, Vitest units
 scripts/eval/             the render-fidelity sweep: run, score, diff
 docs/                     ARCHITECTURE.md, SUPABASE.md, EVAL.md

@@ -2,11 +2,11 @@ import type { NextRequest } from 'next/server';
 import { isCloud } from '@data/config';
 import type { RenderSettings } from '@shell/renders';
 import {
-  CONTROL_KINDS, MAX_USD_PER_IMAGE, missingEnvMessage, overCeiling, type ControlKind,
+  CONTROL_KINDS, PHOTO_MIME, ceilingUsd, missingEnvMessage, overCeiling, type ControlKind,
 } from '@data/providers';
 import {
   DEFAULT_PROVIDER, PROVIDERS, ProviderError, assertAffordable,
-  type ControlImage, type Provider, type SubmitResult,
+  type ControlImage, type Provider, type RefImage, type SubmitResult,
 } from '@server/providers';
 import { currentUserId, serverClient, type ServerDb } from '@server/supabase';
 
@@ -46,6 +46,17 @@ const MAX_TOTAL_IMAGE_BYTES = 8 * 1024 * 1024;
    the same kind twice or a caller looping over something it should not be. */
 const MAX_CONTROLS = 4;
 
+/* Seven, because the most generous provider we have takes eight reference images
+   and one of them is always the plan (`maxReferences` in @data/providers). The
+   browser works the same budget out per provider and sends only what fits; this
+   is the ceiling on what any client may ask for, whatever it believes. */
+const MAX_REFS = 7;
+
+/* The longest an object's caption may be. It travels to the vendor inside the
+   prompt on the fal path, so it is user text on its way into someone else's
+   system: capped, and never trusted to be a line of anything. */
+const MAX_LABEL_CHARS = 120;
+
 /* The ceiling prices OUTPUT megapixels, because that is what BFL's pricing page
    prices. This feature multiplied the input ones: before it a request carried one
    1800 px reference, and now it can carry that plus four maps the same size, so
@@ -70,6 +81,33 @@ function pngDims(base64: string): { width: number; height: number } | null {
   if (head.toString('latin1', 12, 16) !== 'IHDR') return null;
   const width = head.readUInt32BE(16), height = head.readUInt32BE(20);
   return width > 0 && height > 0 ? { width, height } : null;
+}
+
+/* Object photographs are JPEG — `PHOTO_MIME`, encoded in the browser by
+   `encodePhoto` — so the PNG reader above cannot measure them, and measuring
+   them is not optional: they count against the upload's megapixel ceiling.
+   Walks the segment chain to the first SOFn, which is the only place a JPEG
+   states its size. The markers that are NOT frame headers but do carry a length
+   (C4 DHT, C8 JPG, CC DAC) are stepped over rather than misread as one. */
+function jpegDims(base64: string): { width: number; height: number } | null {
+  const b = Buffer.from(base64, 'base64');
+  if (b.length < 4 || b[0] !== 0xFF || b[1] !== 0xD8) return null;
+  let i = 2;
+  while (i + 9 < b.length) {
+    if (b[i] !== 0xFF) { i++; continue; }
+    const marker = b[i + 1];
+    /* padding and the standalone markers carry no length field */
+    if (marker === 0xFF || marker === 0x01 || (marker >= 0xD0 && marker <= 0xD9)) { i += 2; continue; }
+    const len = b.readUInt16BE(i + 2);
+    if (len < 2) return null;
+    if (marker >= 0xC0 && marker <= 0xCF && marker !== 0xC4 && marker !== 0xC8 && marker !== 0xCC) {
+      const height = b.readUInt16BE(i + 5);
+      const width = b.readUInt16BE(i + 7);
+      return width > 0 && height > 0 ? { width, height } : null;
+    }
+    i += 2 + len;
+  }
+  return null;
 }
 
 /* canvas.toDataURL() always returns "data:image/png;base64,…" and the providers
@@ -168,6 +206,54 @@ function controlsOf(v: unknown, refBytes: number): ControlImage[] | Response {
     }
 
     out.push({ kind: kind as ControlKind, base64 });
+  }
+  return out;
+}
+
+/** The object photographs, checked for shape and size and for nothing else.
+ *
+ *  Not filtered by provider here, for the same reason the control maps are not:
+ *  each provider decides what to do with what it is given, and dropping a
+ *  photograph at the boundary because the metadata says the model has one image
+ *  input would be a silent "no" to something the panel promised was sent. What
+ *  this refuses is anything that cannot be a JPEG at all — which is worth
+ *  refusing here, because finding out at the vendor costs a credit.
+ *
+ *  JPEG and not PNG: everything in `refs` was encoded by `encodePhoto` in the
+ *  browser and there is exactly one format it produces. A PNG arriving here is a
+ *  client that has invented its own pipeline, and the honest answer is no. */
+function refsOf(v: unknown, bytesSoFar: number): RefImage[] | Response {
+  if (v === undefined || v === null) return [];
+  if (!Array.isArray(v)) return bad('refs must be an array of { id, base64, label } objects.');
+  if (v.length > MAX_REFS) {
+    return bad(`${v.length} object photos were sent; the most any provider here has room for beside the plan is ${MAX_REFS}.`);
+  }
+
+  const out: RefImage[] = [];
+  let bytes = bytesSoFar;
+  for (const [i, raw] of v.entries()) {
+    const r = obj(raw);
+    if (!r) return bad(`Object photo ${i + 1} is not an object.`);
+    const id = str(r.id) ?? `photo${i + 1}`;
+    const label = (str(r.label) ?? 'object').slice(0, MAX_LABEL_CHARS);
+
+    const base64 = (typeof r.base64 === 'string' ? r.base64 : '').replace(DATA_URL, '').trim();
+    if (!base64) return bad(`Object photo ${i + 1} (${label}) carries no image data.`);
+    if (!BASE64.test(base64)) {
+      return bad(`Object photo ${i + 1} (${label}) is not base64 — send the JPEG payload, not a URL or raw bytes.`);
+    }
+    const size = Buffer.byteLength(base64, 'utf8');
+    if (size > MAX_IMAGE_BYTES) {
+      return bad(`The photo of the ${label} is ${(size / 1024 / 1024).toFixed(1)} MB of base64; the ceiling for one image is ${MAX_IMAGE_BYTES / 1024 / 1024} MB.`, 413);
+    }
+    bytes += size;
+    /* Named as it accumulates, so the refusal points at the photo that took the
+       request over rather than at the last one in the array. */
+    if (bytes > MAX_TOTAL_IMAGE_BYTES) {
+      return bad(`The reference image and ${i + 1} object photo${i ? 's' : ''} come to ${(bytes / 1024 / 1024).toFixed(1)} MB of base64; the ceiling for one request is ${MAX_TOTAL_IMAGE_BYTES / 1024 / 1024} MB. Send fewer photos.`, 413);
+    }
+
+    out.push({ id, base64, label });
   }
   return out;
 }
@@ -330,6 +416,13 @@ export async function POST(request: NextRequest) {
   const controls = controlsOf(b.controls, bytes);
   if (controls instanceof Response) return controls;
 
+  /* Counted from the reference plus the maps, not from the reference alone: the
+     three kinds of image share one 8 MB request, and a per-kind budget would let
+     four maps and seven photos through at 14 MB between them. */
+  const controlBytes = controls.reduce((n, c) => n + Buffer.byteLength(c.base64, 'utf8'), 0);
+  const refs = refsOf(b.refs, bytes + controlBytes);
+  if (refs instanceof Response) return refs;
+
   /* Every uploaded pixel counted together, once the payload is known to be
      well-formed. Per-image byte ceilings do not bound this: PNG of a line drawing
      is mostly flat white and compresses to almost nothing, so five maps can sit
@@ -341,8 +434,21 @@ export async function POST(request: NextRequest) {
     if (!d) return bad(`The ${what} is not a PNG — the reference and every control map are painted by us as PNG, so this is a client sending something else.`);
     inputPixels += d.width * d.height;
   }
+  /* The photographs are measured the same way and against the same ceiling, by
+     the reader for the format they are actually in. Seven 1024 px photos are
+     about 7 MP on top of the plan's 3, which is the whole reason this budget is
+     16 and not 4. */
+  for (const r of refs) {
+    const d = jpegDims(r.base64);
+    if (!d) {
+      return bad(`The photo of the ${r.label} is not a JPEG — object photos are encoded as ${PHOTO_MIME} in the browser, so this is a client sending something else.`);
+    }
+    inputPixels += d.width * d.height;
+  }
   if (inputPixels > MAX_INPUT_MEGAPIXELS * 1e6) {
-    return bad(`The reference image and ${controls.length} control map${controls.length === 1 ? '' : 's'} come to ${(inputPixels / 1e6).toFixed(1)} megapixels of upload; the ceiling is ${MAX_INPUT_MEGAPIXELS} MP. Paint them at a smaller maxPx.`, 413);
+    const parts = [`${controls.length} control map${controls.length === 1 ? '' : 's'}`];
+    if (refs.length) parts.push(`${refs.length} object photo${refs.length === 1 ? '' : 's'}`);
+    return bad(`The reference image, ${parts.join(' and ')} come to ${(inputPixels / 1e6).toFixed(1)} megapixels of upload; the ceiling is ${MAX_INPUT_MEGAPIXELS} MP. Paint them at a smaller maxPx.`, 413);
   }
 
   const width = int(b.width), height = int(b.height);
@@ -408,7 +514,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const job = await provider.submit({ prompt, imageBase64, controls, width, height, seed, controlScale });
+    const job = await provider.submit({ prompt, imageBase64, controls, refs, width, height, seed, controlScale });
     /* Three figures, deliberately not one. `usd` is what we priced this at before
        committing — our own arithmetic; `cost` is the vendor's quote in its own
        unit; `quotedUsd` is that quote in dollars where the unit is known. The
@@ -418,7 +524,7 @@ export async function POST(request: NextRequest) {
     const meter = job.metered
       ? ` inMp=${job.metered.inputMp ?? '?'} outMp=${job.metered.outputMp ?? '?'}`
       : '';
-    console.log(`[render] submitted ${job.id} ${provider.id} ${width}×${height} seed=${seed ?? 'random'} maps=${controls.length}/${(inputPixels / 1e6).toFixed(1)}MP cost=${job.cost ?? 'not quoted'} quoted=${job.quotedUsd ?? 'unconvertible'} usd=${job.usd ?? 'unpriced'}${meter}`);
+    console.log(`[render] submitted ${job.id} ${provider.id} ${width}×${height} seed=${seed ?? 'random'} maps=${controls.length} photos=${refs.length}/${(inputPixels / 1e6).toFixed(1)}MP cost=${job.cost ?? 'not quoted'} quoted=${job.quotedUsd ?? 'unconvertible'} usd=${job.usd ?? 'unpriced'}${meter}`);
 
     /* The ceiling can only ever be asserted before the money is gone, so this
        cannot refuse anything — but a vendor quoting more than a dime means
@@ -426,9 +532,9 @@ export async function POST(request: NextRequest) {
        since was theatre. Loud here, and passed back so the panel can say it to
        the person who just paid it rather than leaving it in a server log nobody
        reads. */
-    const over = overCeiling(job.quotedUsd);
+    const over = overCeiling(job.quotedUsd, provider);
     if (over) {
-      console.error(`[render] OVER CEILING: ${provider.id} quoted $${job.quotedUsd?.toFixed(3)} for ${width}×${height} against a $${MAX_USD_PER_IMAGE.toFixed(2)} ceiling — estimateUsd said $${job.usd?.toFixed(3) ?? '?'}. Stop rendering on this provider until the rate is corrected in src/data/providers.ts.`);
+      console.error(`[render] OVER CEILING: ${provider.id} quoted $${job.quotedUsd?.toFixed(3)} for ${width}×${height} against a $${ceilingUsd(provider).toFixed(2)} ceiling — estimateUsd said $${job.usd?.toFixed(3) ?? '?'}. Stop rendering on this provider until the rate is corrected in src/data/providers.ts.`);
     }
     const quote = { quotedUsd: job.quotedUsd ?? null, estimatedUsd: job.usd ?? null, overCeiling: over };
     if (!ctx) return Response.json({ jobId: job.id, pollUrl: job.pollUrl, provider: provider.id, ...quote });

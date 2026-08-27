@@ -366,10 +366,8 @@ describe('image-generator prompt', () => {
      extra one has to be a sentence, not a paragraph. */
   it('adds one short sentence per attached map and no more', () => {
     const plain = headWords(buildPrompt(floor, base));
-    const labelled = headWords(buildPrompt(floor, { ...base, imgLabels: true }));
     const one = headWords(buildPrompt(floor, { ...base, controls: ['line'] }));
     const two = headWords(buildPrompt(floor, { ...base, controls: ['line', 'depth'] }));
-    expect(labelled - plain).toBeLessThanOrEqual(30);
     /* the first map pays for the "keep the arrangement" sentence as well */
     expect(one - plain).toBeLessThanOrEqual(35);
     expect(two - one).toBeLessThanOrEqual(20);
@@ -459,21 +457,25 @@ describe('image-generator prompt', () => {
   /* A style is two words in a box; the image model needs materials, colours and
      light. The expansion says what the word means without taking the words the
      person actually typed away from them. */
-  /* Our own lettering comes back drawn into the render — that is why the
-     measurement captions were turned off. The labels earn their place anyway, so
-     the brief has to stop claiming the reference is unlettered and say what the
-     captions are for instead. */
-  it('calls the reference annotated only when the labels are actually on it', () => {
-    const on = buildPrompt(floor, { ...base, imgLabels: true });
-    expect(on).toMatch(/reference image is annotated/i);
-    expect(on).toMatch(/draw none of the lettering/i);
-    /* was "no text, labels or dimensions anywhere in the render" — the same ban
-       in fewer words, because the opening block is now on a word budget */
-    expect(on).toMatch(/no text or labels anywhere in the render/i);
-
-    const off = buildPrompt(floor, base);
-    expect(off).not.toMatch(/annotated/i);
-    expect(off).not.toMatch(/lettering/i);
+  /* The brief no longer talks about the picture's annotation, because there is
+     none to talk about. It described captions, then numbered discs, and each
+     time the description was a mitigation for ink we had put there ourselves —
+     the discs came back painted onto the render's floor as black roundels. The
+     one thing left to say about text is the positive ban in CAMERA AND OUTPUT,
+     and a brief that does not discuss writing is a brief less likely to produce
+     any: FLUX.2 has no negative prompt to push against. */
+  it('says nothing about annotation on the picture, on any setting', () => {
+    const out = buildPrompt(floor, base);
+    expect(out).not.toMatch(/black disc/i);
+    expect(out).not.toMatch(/# column/i);
+    expect(out).not.toMatch(/captions/i);
+    expect(out).not.toMatch(/draw none of/i);
+    /* The ban names NUMBERS, and it has to: the render came back with eight
+       dimension labels on it, lettered from "1.2 m" in the camera line and
+       "6.2 × 11.2 m" under LOCKED. Both numerals are gone from the brief and the
+       ban says the word out loud. Still short — the opening block is on a word
+       budget. */
+    expect(out).toMatch(/no text, numbers or dimension lines/i);
   });
 
   it('expands a style it recognises, and keeps the typed words on top', () => {
@@ -578,8 +580,12 @@ describe('the area headline stays coherent with the footprint', () => {
 
     const out = buildPrompt(f, { view: 'top', furniture: false, dimensions: true });
     const subject = out.split('\n').find(l => l.startsWith('"'))!;
-    expect(subject).toContain('overall footprint 8.0 × 10.0 m');
     expect(subject).not.toMatch(/m² over/);          // no 1.0 m² inside an 80 m² shell
+    /* And no footprint either, mapped or not: "8.0 × 10.0 m" is shaped like a
+       dimension chain and the model drew one. See the comment above this line in
+       prompt.ts. */
+    expect(subject).not.toMatch(/footprint/);
+    expect(subject).not.toMatch(/×/);
   });
 
   it('keeps the total when the rooms do cover the plan, and counts them properly', () => {
@@ -589,7 +595,10 @@ describe('the area headline stays coherent with the footprint', () => {
     expect(planFacts(f).mapped).toBe(true);
     const subject = buildPrompt(f, { view: 'top', furniture: false, dimensions: true })
       .split('\n').find(l => l.startsWith('"'))!;
-    expect(subject).toMatch(/80\.0 m² over 1 named room, overall footprint 8\.0 × 10\.0 m/);
+    /* The area the rooms actually account for, and nothing shaped like a
+       dimension chain — see the sibling test above. */
+    expect(subject).toMatch(/80\.0 m² over 1 named room/);
+    expect(subject).not.toMatch(/footprint/);
   });
 });
 
@@ -643,10 +652,12 @@ describe('placeOf puts a position into words', () => {
     expect(out).toMatch(/OBJECTS/);
   });
 
-  /* Both channels used to describe the same sofa, and the words are the weaker
-     one: the OBJECTS table said "against the left wall, upper" while the pixels
-     said it exactly, and a model that has to reconcile the two moves it. */
-  it('leaves the position of an object to the drawing', () => {
+  /* Position is back in the table, doing a different job. As an instruction it
+     is the weaker channel — the pixels say where the sofa is exactly — but as
+     the ADDRESS of a row it is the only channel there is, now that nothing may
+     be written on the picture. It is scoped to the room for that reason: what
+     has to be resolved is which of this room's four blocks the row means. */
+  it('addresses an object by where it sits in its own room', () => {
     const p = blankProject('x', false);
     const f = p.floors[0];
     const sofa = makeItem('sofa3', { x: 40, y: 200 });
@@ -654,14 +665,16 @@ describe('placeOf puts a position into words', () => {
     f.items.push(sofa);
 
     const said = placeOf(sofa, shellBBox(f)!);
-    expect(said).toBe('against the left wall, upper');   // placeOf still works
+    expect(said).toBe('against the left wall, upper');
 
     const out = buildPrompt(f, { view: 'top', furniture: true, dimensions: true });
-    const row = out.split('\n').find(l => l.startsWith('Woonkamer | sofa |') || / \| sofa \| /.test(l))!;
+    const row = out.split('\n').find(l => / \| sofa \| /.test(l))!;
     expect(row).toBeTruthy();
-    expect(out).not.toContain(said);
-    expect(out).not.toMatch(/^Room \| Object \| Size \| Position/m);
-    expect(out).not.toMatch(/\| Position \|/);
+    /* the column is named Where, and it carries the phrase placeOf builds */
+    expect(out).toMatch(/^Room \| Object \| Where \| Size \| Notes$/m);
+    expect(row).toContain('against the left wall');
+    /* and never a number: nothing in this brief points at a mark on the picture */
+    expect(out).not.toMatch(/^# \|/m);
   });
 
   /* A size in the text is an invitation to letter the render with it — the same
@@ -677,12 +690,12 @@ describe('placeOf puts a position into words', () => {
     f.items.push(sofa);
 
     const off = buildPrompt(f, { view: 'top', furniture: true, dimensions: false });
-    expect(off).toMatch(/^Room \| Object \| Notes$/m);
+    expect(off).toMatch(/^Room \| Object \| Where \| Notes$/m);
     expect(off).not.toMatch(/\bcm\b/);
     expect(off).not.toMatch(/\| Size \|/);
 
     const on = buildPrompt(f, { view: 'top', furniture: true, dimensions: true });
-    expect(on).toMatch(/^Room \| Object \| Size \| Notes$/m);
+    expect(on).toMatch(/^Room \| Object \| Where \| Size \| Notes$/m);
     expect(on).toMatch(/\| \d+×\d+ cm \|/);
   });
 
@@ -757,10 +770,12 @@ describe('object descriptions', () => {
     setDesc(sofa, 'dark green velvet, mid-century, low back');
 
     const out = buildPrompt(f, base);
-    const line = out.split('\n').find(l => l.includes('| sofa 3-seat |'))!;
-    /* Room | Object | Size | Notes, in that order and nothing else. Position was
-       the fifth column until the geometry moved into the conditioning image. */
-    expect(line).toMatch(/^Woonkamer \| sofa 3-seat \| \d+×\d+ cm \| dark green velvet, mid-century, low back$/);
+    const line = out.split('\n').find(l => l.includes('| three-seat sofa |'))!;
+    /* Room | Object | Where | Size | Notes, in that order and nothing else. The
+       Where cell is the row's address: it is how this line and the sentence that
+       names a photograph of this sofa point at the same rectangle, now that
+       nothing may be written on the picture itself. */
+    expect(line).toMatch(/^Woonkamer \| three-seat sofa \| [a-z-]+[^|]*\| \d+×\d+ cm \| dark green velvet, mid-century, low back$/);
     /* the header says the Notes column is an instruction, so it is not restated */
     expect(out).not.toMatch(/deliberate instructions/i);
   });
@@ -769,11 +784,11 @@ describe('object descriptions', () => {
     const { q, f } = plan();
     furnish(f);
     const out = buildPrompt(f, base);
-    const rows = out.split('\n').filter(l => /^Woonkamer \| (sofa 3-seat|rug) \|/.test(l));
+    const rows = out.split('\n').filter(l => /^Woonkamer \| (three-seat sofa|rug) \|/.test(l));
     expect(rows).toHaveLength(2);
     /* an undescribed object still gets its own row — the Notes cell is simply
-       empty. Four columns since Position left: Room | Object | Size | Notes. */
-    for (const r of rows) expect(r.split(' | ')).toHaveLength(4);
+       empty. Five columns: Room | Object | Where | Size | Notes. */
+    for (const r of rows) expect(r.split(' | ')).toHaveLength(5);
     expect(rows.every(r => r.endsWith('| —'))).toBe(true);
   });
 
@@ -794,7 +809,7 @@ describe('object descriptions', () => {
     /* anonymous is noise: the .fml ships dozens of unnamed boxes */
     const anon = { ...makeItem('sofa3', c), fromFunda: 1 as const, label: '', noLabel: 1 as const };
     f.items.push(anon);
-    expect(buildPrompt(f, base)).not.toMatch(/sofa 3-seat/i);
+    expect(buildPrompt(f, base)).not.toMatch(/three-seat sofa/i);
 
     /* but a name the user typed is the opposite — leaving the staircase out of
        the text is how a render grows a corridor that is not in the plan */

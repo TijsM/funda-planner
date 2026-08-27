@@ -1,9 +1,10 @@
 import 'server-only';
 
-import { metaOf, missingEnvMessage, type ControlKind, type ProviderMeta } from '@data/providers';
+import { PHOTO_MIME, metaOf, missingEnvMessage, type ControlKind, type ProviderMeta } from '@data/providers';
 import {
   ProviderError, assertAffordable, controlLegend, detailMsg, estimateUsd,
-  hopSafeFetch, jsonBody, obj, str, transportFailure, underHost, usableControls,
+  hopSafeFetch, jsonBody, obj, refLegend, spareSlots, str, transportFailure, underHost,
+  usableControls, usableRefs,
   type GenerateArgs, type PollResult, type Provider, type SubmitResult,
 } from './types';
 
@@ -146,9 +147,15 @@ async function httpFailure(res: Response, read?: unknown): Promise<ProviderError
 
 /** fal takes an image anywhere it takes a URL, so the reference never has to be
  *  uploaded anywhere first. Everything upstream of here keeps base64 raw — this
- *  is the single place the container goes back on. */
-export function dataUri(base64: string): string {
-  return `data:image/png;base64,${base64}`;
+ *  is the single place the container goes back on.
+ *
+ *  The mime is a parameter now because not every image we send is one we painted:
+ *  the plan and the control maps are PNG, and an object photograph is a JPEG (see
+ *  `PHOTO_MIME`). Declaring a JPEG as `image/png` is not a harmless label — the
+ *  decoder on the other side reads the container, and the plan was to find that
+ *  out from a 422 rather than from here. */
+export function dataUri(base64: string, mime = 'image/png'): string {
+  return `data:${mime};base64,${base64}`;
 }
 
 /* ── the request bodies ──────────────────────────────────────────── */
@@ -284,12 +291,22 @@ export const fluxGeneralBody: BodyFor = (meta, args) => {
  *  because each reference is a megabyte of base64 on a request that already
  *  carries the plan, and an unbounded loop over `args.controls` would size the
  *  upload by whatever the harness felt like emitting that day. */
-export const qwenBody: BodyFor = (_meta, args) => {
-  const extra = (args.controls ?? []).slice(0, 2);
-  const legend = controlLegend(extra, args.prompt);
+export const qwenBody: BodyFor = (meta, args) => {
+  /* Photographs before conditioning maps, the same order and for the same
+     reason as `references()` in bfl.ts: a photo of the actual sofa is what the
+     render is for, and a map handed to a model with no control channel is an
+     experiment. Two spare slots here, not seven, so the order does real work. */
+  const photos = usableRefs(meta, args.refs);
+  const extra = (args.controls ?? []).slice(0, Math.max(0, spareSlots(meta) - photos.length));
+  const legend = [refLegend(photos, 2, args.prompt), controlLegend(extra, args.prompt)]
+    .filter(Boolean).join(' ');
   return {
     prompt: legend ? `${args.prompt} ${legend}` : args.prompt,
-    image_urls: [dataUri(args.imageBase64), ...extra.map((c) => dataUri(c.base64))],
+    image_urls: [
+      dataUri(args.imageBase64),
+      ...photos.map((r) => dataUri(r.base64, PHOTO_MIME)),
+      ...extra.map((c) => dataUri(c.base64)),
+    ],
     image_size: { width: args.width, height: args.height },
     num_inference_steps: 50,
     guidance_scale: 4,

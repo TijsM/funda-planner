@@ -3,7 +3,8 @@ import 'server-only';
 import { metaOf, missingEnvMessage, quotedUsdOf, type ProviderMeta } from '@data/providers';
 import {
   ProviderError, assertAffordable, controlLegend, detailLine, detailMsg, estimateUsd,
-  hopSafeFetch as hopSafe, jsonBody, num, obj, str, transportFailure, underHost,
+  hopSafeFetch as hopSafe, jsonBody, num, obj, refLegend, spareSlots, str, transportFailure,
+  underHost, usableRefs,
   type GenerateArgs, type PollResult, type Provider, type SubmitResult,
 } from './types';
 
@@ -161,25 +162,44 @@ export async function hopSafeFetch(url: URL, init: RequestInit, hops = 3): Promi
 
 /* ── the two calls ───────────────────────────────────────────────── */
 
-/** Extra conditioning maps go in the spare reference slots. FLUX.2 has no
- *  control input — docs.bfl.ai is explicit that structure is interpreted
- *  *semantically* — so a depth map here is read as a picture of a depth map and
- *  there is no evidence it constrains geometry at all. It is sent because the
- *  slots are free (billing is on output resolution only) and the harness is what
- *  will tell us whether it did anything. Nothing more is claimed for it. */
-function references(args: GenerateArgs): Record<string, string> {
+/** What goes in `input_image` and `input_image_2 … _8`.
+ *
+ *  PHOTOGRAPHS FIRST, then conditioning maps, and the order is a judgement
+ *  rather than a convention. A photo of the sofa someone actually bought is the
+ *  thing they are paying this render to show; a control map handed to FLUX.2 is
+ *  an experiment — docs.bfl.ai is explicit that this model has no control input
+ *  and "interprets structure semantically", so there is no evidence a depth map
+ *  in a reference slot constrains geometry at all. When there are more images
+ *  than slots, the experiment is what gets dropped.
+ *
+ *  Trimmed rather than trusted: the browser counts the same budget before it
+ *  asks, but the eval harness calls this directly. Eight keys is the schema's
+ *  limit and a ninth is a 422 charged at full price. */
+function references(meta: ProviderMeta, args: GenerateArgs): Record<string, string> {
   const out: Record<string, string> = { input_image: args.imageBase64 };
-  (args.controls ?? []).slice(0, 7).forEach((c, i) => { out[`input_image_${i + 2}`] = c.base64; });
+  const photos = usableRefs(meta, args.refs);
+  const maps = (args.controls ?? []).slice(0, Math.max(0, spareSlots(meta) - photos.length));
+  [...photos.map(r => r.base64), ...maps.map(c => c.base64)]
+    .forEach((base64, i) => { out[`input_image_${i + 2}`] = base64; });
   return out;
 }
 
 /** The prompt with a sentence naming what each extra reference is — unless the
  *  brief already names them, which the app's own briefs do. Appended rather than
  *  prepended: BFL's prompting guide says word order matters and the brief has to
- *  come first. */
-function promptFor(args: GenerateArgs): string {
-  const legend = controlLegend(args.controls ?? [], args.prompt);
-  return legend ? `${args.prompt} ${legend}` : args.prompt;
+ *  come first.
+ *
+ *  The two legends are numbered off the same allocation `references()` makes, in
+ *  the same order, because a sentence that calls image 3 a depth map when slot 3
+ *  holds a photograph of a wardrobe is worse than saying nothing at all. */
+function promptFor(meta: ProviderMeta, args: GenerateArgs): string {
+  const photos = usableRefs(meta, args.refs);
+  const maps = (args.controls ?? []).slice(0, Math.max(0, spareSlots(meta) - photos.length));
+  const parts = [
+    refLegend(photos, 2, args.prompt),
+    controlLegend(maps, args.prompt),
+  ].filter(Boolean);
+  return parts.length ? `${args.prompt} ${parts.join(' ')}` : args.prompt;
 }
 
 async function bflSubmit(meta: ProviderMeta, model: string, extra: Record<string, unknown>, args: GenerateArgs): Promise<SubmitResult> {
@@ -198,8 +218,8 @@ async function bflSubmit(meta: ProviderMeta, model: string, extra: Record<string
       method: 'POST',
       headers: { 'x-key': key, 'content-type': 'application/json', accept: 'application/json' },
       body: JSON.stringify({
-        prompt: promptFor(args),
-        ...references(args),
+        prompt: promptFor(meta, args),
+        ...references(meta, args),
         width: args.width,
         height: args.height,
         seed: args.seed,

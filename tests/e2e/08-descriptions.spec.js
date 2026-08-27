@@ -138,10 +138,12 @@ test.describe('a description on every object', () => {
     expect(p).toContain('plastered walls, low winter light');
     expect(p).toContain('dark green velvet, mid-century, low back');
     /* On the object's own row, not dumped in a separate block. The brief is
-       columns now rather than sentences — "sofa 3-seat (225×95 cm) — dark green
+       columns now rather than sentences — "three-seat sofa (225×95 cm) — dark green
        velvet" became a row of an OBJECTS table — because connective prose is
        something the model weighs differently one line to the next. */
-    expect(p).toMatch(/\| sofa 3-seat \| [\d×]+ cm \| dark green velvet/);
+    /* Room | Object | Where | Size | Notes — the Where cell is the row's address,
+       and it is there because nothing may be written on the picture. */
+    expect(p).toMatch(/\| three-seat sofa \| [^|]+ \| [\d×]+ cm \| dark green velvet/);
     /* And the sentence that says a Notes cell is an instruction rather than
        flavour text. It used to appear only once something was described; it is
        now part of the LOCKED header and always present, which is why the

@@ -4,7 +4,7 @@ import type {
 import { bboxOf, clamp, dist, fmtM2, polyArea, polyCentroid, unitNormal } from './geometry';
 import { CAT_BY_KIND, rr, toneFor } from './catalog';
 import { drawShape } from './custom';
-import { labelOf, shellBBox } from './model';
+import { hasPhotos, labelOf, shellBBox } from './model';
 import {
   ACC, CYA, GHOST, PAPER, WALLC, gridStep, hexA, openingRect, pathPoly, wallQuad,
 } from './shapes';
@@ -42,19 +42,58 @@ export interface PaintInput {
   /** Automatic overall dimension chains plus a size under each room name. For
    *  the print; never for the generator reference, which must carry no text. */
   measures?: boolean;
-  /** Object labels. On by default; off for the generator reference, which the
-   *  prompt promises carries no lettering — this used to leak "Sofa 3-seat"
-   *  and the like straight into the conditioning image. */
+  /** Object labels. On by default; off for the generator reference.
+   *
+   *  Nothing this painter can draw as a glyph belongs on an image a generator is
+   *  told to copy. That is not a style preference, it is the one thing two rounds
+   *  of renders have proved: captions leaked "Sofa 3-seat" into the output, and
+   *  the numbered discs that replaced them — bigger, on purpose, so the model
+   *  could read them — came back painted onto the floor as black roundels. The
+   *  model does not have a channel for "annotation"; every mark is geometry.
+   *  Identity is carried in the brief's words instead, where it costs nothing to
+   *  be wrong about. */
   objectLabels?: boolean;
   /** Draw imported fitted objects as hatched, dashed boxes — right for a person,
    *  who needs to see what came from the listing. Wrong for a generator: dashed
    *  hatch is the drawing convention for a *surface*, so a run of them reads as
    *  paving or a corridor rather than as joinery. Off for the reference image. */
   hatchFixtures?: boolean;
+  /** A dot on every object that carries a photograph of the real thing.
+   *
+   *  Default OFF, which is the important half: the reference image, the control
+   *  passes and the print all go through this same painter, and a mark of ours
+   *  landing in the conditioning image is geometry the model would draw. Only
+   *  the live editor canvas turns it on — it is there so "which of these have I
+   *  chosen furniture for" is answerable at a glance, across a whole floor. */
+  photoMarks?: boolean;
   /** Multiplies every annotation size and screen-space offset. The renderer is
    *  written for a 1× screen canvas, so on a 3600 px print a 12 px caption comes
    *  out illegible — the export derives this from its own resolution. */
   textScale?: number;
+}
+
+/** How big a numbered badge is drawn, in pixels.
+ *
+ *  A fact about the IMAGE rather than about the plan, which is the whole reason
+ *  the badges exist: the captions they replaced were sized off the drawing (11 px
+ *  of type, whatever the canvas) and came out at 0.7% of an 1800 px reference,
+ *  which an image model sees through an 8× downsample as about a pixel and a
+ *  half. So the radius is a fraction of the picture's long side, floored at 1.3%
+ *  — a 47 px disc on an 1800 px reference — and only then allowed to shrink
+ *  towards the object it sits on.
+ *
+ *  Exported so the floor can be asserted rather than eyeballed. If this number
+ *  ever drifts down again the renders go back to inventing cabinets where the
+ *  fireplaces are. */
+export const BADGE_MIN_FRACTION = 0.013;
+export const BADGE_MAX_FRACTION = 0.024;
+
+export function badgeRadius(objectMinPx: number, longSidePx: number): number {
+  return clamp(
+    objectMinPx * 0.5,
+    longSidePx * BADGE_MIN_FRACTION,
+    longSidePx * BADGE_MAX_FRACTION,
+  );
 }
 
 export function paint(g: Ctx, input: PaintInput): void {
@@ -64,6 +103,7 @@ export function paint(g: Ctx, input: PaintInput): void {
     ghost = null, selection = [], handles = [], hover = null, draft = null,
     place = null, marquee = null, snapHint = null, roomLabels = true, vignette = live,
     measures = false, objectLabels = true, textScale = 1, hatchFixtures = true,
+    photoMarks = false,
   } = input;
 
   const Z = view.zoom, PX = view.px, PY = view.py;
@@ -270,6 +310,12 @@ export function paint(g: Ctx, input: PaintInput): void {
   });
 
   /* ---- objects ---- */
+  /* Where a numbered disc has already been put, so the next one can step aside.
+     Two objects can share a centre — a fireplace sits inside its enclosure, a hob
+     in a worktop — and the second badge then lands exactly on the first. On a
+     reference that happened for real: #5 was invisible under #4, so the brief
+     named a number the picture did not show. */
+  const placed: { x: number; y: number; r: number }[] = [];
   if (L.furn) {
     f.items.forEach(i => {
       world(); g.save();
@@ -289,8 +335,24 @@ export function paint(g: Ctx, input: PaintInput): void {
            joinery in every render brief that reads this drawing. */
         drawShape(g, i.shape, i.w, i.h);
       } else if (!hatchFixtures) {
-        /* a plain solid block: unmistakably an object with a footprint */
+        /* Built-in cabinetry, drawn the way a plan draws it: a solid mass with a
+           second line inside it. The dashed hatch this replaces is the drawing
+           convention for a *surface*, so a run of them read as paving and the
+           renders came back with corridors where the kitchen units are — but the
+           plain block that replaced the hatch went too far the other way, drawn
+           at 0.2 alpha for a fixture against 0.3 for furniture. The ten anonymous
+           blocks the brief pleads with the model to treat as joinery were the
+           faintest ink on the picture. Now they are the densest. */
+        g.fillStyle = hexA(col, 0.5);
         rr(g, -i.w / 2, -i.h / 2, i.w, i.h, 2); g.fill(); g.stroke();
+        const inset = Math.min(6, Math.min(i.w, i.h) / 5);
+        if (inset > 1.5) {
+          g.save();
+          g.globalAlpha = 0.55; g.lineWidth = LW(1);
+          rr(g, -i.w / 2 + inset, -i.h / 2 + inset, i.w - inset * 2, i.h - inset * 2, 1);
+          g.stroke();
+          g.restore();
+        }
       } else {
         /* imported fitted object: hatched box — clearly from the listing */
         rr(g, -i.w / 2, -i.h / 2, i.w, i.h, 2); g.fill();
@@ -307,6 +369,25 @@ export function paint(g: Ctx, input: PaintInput): void {
         g.stroke(); g.restore();
       }
       g.restore();
+
+      /* Screen space and a fixed radius: the mark says "this one has a photo",
+         which is a fact about the object and not about how far you are zoomed
+         in. Skipped on anything too small to aim at, where it would be the only
+         thing visible of the object it belongs to. */
+      if (photoMarks && hasPhotos(i)) {
+        const rad = ((i.rot || 0) * Math.PI) / 180;
+        const hw = (Math.abs(i.w * Math.cos(rad)) + Math.abs(i.h * Math.sin(rad))) / 2;
+        const hh = (Math.abs(i.w * Math.sin(rad)) + Math.abs(i.h * Math.cos(rad))) / 2;
+        if (Math.min(hw, hh) * 2 * Z > 16) {
+          screen();
+          const cx = sx(i.x + hw), cy = sy(i.y - hh);
+          g.beginPath(); g.arc(cx, cy, 5, 0, Math.PI * 2);
+          g.fillStyle = '#C7A44E'; g.fill();
+          g.lineWidth = 1.4; g.strokeStyle = PAPER; g.stroke();
+          g.beginPath(); g.arc(cx, cy, 1.9, 0, Math.PI * 2);
+          g.fillStyle = PAPER; g.fill();
+        }
+      }
 
       const lab = objectLabels ? labelOf(i) : '';
       if (lab && i.w * Z > 34 * TS) {

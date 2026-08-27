@@ -54,6 +54,10 @@ export async function fresh(page, opts = {}) {
            the database, so the open waits behind the delete. The name is
            `IDB_NAME` in src/shell/renders.ts; this file cannot import it. */
         indexedDB.deleteDatabase('pgs.renders.v1');
+        /* Object photographs live in a second database and survive a run the
+           same way, so one leftover sofa would show up in another test's render
+           panel. `IDB_NAME` in src/shell/photos.ts; this file cannot import it. */
+        indexedDB.deleteDatabase('pgs.photos.v1');
         sessionStorage.setItem('__pw_cleared', '1');
       }
       localStorage.setItem('pgs.coach.v1', '1');   // never show the coach mark in tests

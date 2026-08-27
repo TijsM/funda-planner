@@ -3,23 +3,28 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ed, useEditor, useSelection } from '@state/store';
 import {
-  SEED_MAX, applySettings, attachedControls, busy, outputDims, parseSeed,
-  promptControls, promptKeyOf, randomSeed, rs, settingsOf, useRenders,
+  SEED_MAX, applySettings, attachedControls, attachedPhotos, busy, outputDims, parseSeed,
+  photoSlots, promptControls, promptKeyOf, randomSeed, rs, settingsOf, useRenders,
+  type AttachedPhoto,
 } from '@state/renders';
-import { STYLE_PRESETS, buildPrompt, planFacts, type ViewKind } from '@engine/prompt';
+import {
+  STYLE_PRESETS, buildPrompt, expandStyle, photoSubjects, planFacts,
+  type PhotoSubject, type ViewKind,
+} from '@engine/prompt';
 import { polyArea } from '@engine/geometry';
 import { fmtM2 } from '@engine/geometry';
 import { slug } from '@engine/io/serialize';
 import { isCloud } from '@data/config';
 import { RESIGN_EVERY_MS } from '@data/cloudRenders';
 import {
-  CONTROL_KINDS, DEFAULT_PROVIDER, MAX_USD_PER_IMAGE, PROVIDER_META, estimateUsd, metaOf,
+  CONTROL_KINDS, DEFAULT_PROVIDER, PROVIDER_META, ceilingUsd, estimateUsd, metaOf,
   type ControlKind,
 } from '@data/providers';
 import { download, referenceOpts, renderFloorCanvas } from '../files';
 import { deleteRender, renderBlob, succeeded, totalBytes, type RenderRecord } from '../renders';
 import { refreshRenders, startRender } from '../jobs';
 import { Icon } from './Icons';
+import { usePhotoState } from './photoUrls';
 import { fullUrlFor, releaseAllBut, urlFor } from './renderUrls';
 
 const VIEWS: { v: ViewKind; label: string }[] = [
@@ -85,10 +90,10 @@ export function RenderModal() {
   const dimensions = useRenders(s => s.dimensions);
   const roomLabels = useRenders(s => s.roomLabels);
   const imgMeasures = useRenders(s => s.imgMeasures);
-  const imgLabels = useRenders(s => s.imgLabels);
   const provider = useRenders(s => s.provider);
   const controls = useRenders(s => s.controls);
   const controlScale = useRenders(s => s.controlScale);
+  const photoOff = useRenders(s => s.photoOff);
   const prompt = useRenders(s => s.prompt);
   const seed = useRenders(s => s.seed);
   const seedLocked = useRenders(s => s.seedLocked);
@@ -149,13 +154,37 @@ export function RenderModal() {
     void totalBytes().then(setBytes);
   }, [renders]);
 
+  /* Every photographed object in scope, in the order the slots are spent, and
+     which of their photographs will actually go. Both come from the engine and
+     the store rather than from anything this panel decides: `jobs.ts` calls the
+     same two functions at submit, so the checkbox list, the image numbers in the
+     brief and the request itself cannot disagree. `rev` is in the deps because
+     a photo is attached by mutating the document in place. */
+  const subjects = useMemo(
+    () => (floor ? photoSubjects(floor, room) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [floor, room, rev],
+  );
+  const off = useMemo(() => new Set(photoOff), [photoOff]);
+  const pics = useMemo(
+    () => attachedPhotos(provider, controls, subjects, off),
+    [provider, controls, subjects, off],
+  );
+  const slots = photoSlots(provider, controls);
+
   const settings = useMemo(
-    () => settingsOf({
-      view, room, style, furniture, dimensions, roomLabels, imgMeasures, imgLabels,
-      provider, controls, controlScale,
+    () => ({
+      ...settingsOf({
+        view, room, style, furniture, dimensions, roomLabels, imgMeasures,
+        provider, controls, controlScale,
+      }),
+      /* The ids that will go, in order — the same field the record keeps as its
+         receipt, and part of `promptKey` so the brief is rebuilt when the list
+         moves. */
+      photos: pics.map(a => a.id),
     }),
-    [view, room, style, furniture, dimensions, roomLabels, imgMeasures, imgLabels,
-      provider, controls, controlScale],
+    [view, room, style, furniture, dimensions, roomLabels, imgMeasures,
+      provider, controls, controlScale, pics],
   );
   const promptKey = project && floor ? promptKeyOf(project.id, floor.id, rev, settings) : '';
 
@@ -166,8 +195,14 @@ export function RenderModal() {
      the channel rather than into the model's stack of references, and on z-image
      it replaces the reference outright. */
   const brief = useMemo(
-    () => ({ ...settings, controls: promptControls(provider, controls) }),
-    [settings, provider, controls],
+    () => ({
+      ...settings,
+      controls: promptControls(provider, controls),
+      /* The photographs as the brief refers to them, not as ids. Same array, same
+         order — what the sentences number is what the request attaches. */
+      photos: pics.map(a => ({ objId: a.objId, label: a.label, room: a.room, note: a.note })),
+    }),
+    [settings, provider, controls, pics],
   );
 
   const rebuild = useCallback(() => {
@@ -188,10 +223,14 @@ export function RenderModal() {
      geometry for a plan that was never sent. */
   useEffect(() => {
     if (!floor) return;
-    const cv = renderFloorCanvas(floor, referenceOpts({ furniture, roomLabels, imgMeasures, imgLabels }));
+    const cv = renderFloorCanvas(floor, referenceOpts({
+      furniture, roomLabels, imgMeasures, room,
+    }));
     setCanvas(cv);
     setImg(cv ? cv.toDataURL('image/png') : '');
-  }, [floor, furniture, roomLabels, imgMeasures, imgLabels, rev]);
+    /* `room` is a dependency: a room-scoped brief describes that room, and the
+       picture it is attached to has to be framed on the same thing. */
+  }, [floor, furniture, roomLabels, imgMeasures, room, rev]);
 
   /* Open on the reference image, never on whichever render was selected last
      time. The right pane is what the next Generate is built from — a previous
@@ -346,6 +385,29 @@ export function RenderModal() {
                 </datalist>
               </div></div>
             </div>
+            {/* The presets, on the surface rather than inside a datalist nobody
+                opens. An empty Style box emits no STYLE block at all, and a brief
+                with no style in it is a brief whose only material instruction is
+                whatever someone typed in a room's Notes — which is how a floor
+                described as "dark brown laminaar" came back dark brown
+                everywhere, in four different woods. A render always has a style;
+                the only question is whether it was chosen. */}
+            <div className="row styles-row">
+              <span className="lbl" />
+              <div className="fields styles">
+                {STYLE_PRESETS.map(pre => (
+                  <button
+                    key={pre.label} type="button"
+                    className={`chip${expandStyle(style)?.label === pre.label ? ' on' : ''}`}
+                    title={pre.tokens}
+                    onClick={() => rs().patch({ style: pre.label })}
+                  >{pre.label}</button>
+                ))}
+                {!style.trim() && (
+                  <em>No style set — the render invents one.</em>
+                )}
+              </div>
+            </div>
 
             <div className="row" style={{ marginTop: 8, marginBottom: 2 }}>
               <span className="lbl">Model</span>
@@ -372,7 +434,7 @@ export function RenderModal() {
                 <>
                   <br />{usd(cost)} for {out.width}×{out.height}
                   {' '}({(out.width * out.height / 1e6).toFixed(1)} MP), against a
-                  {' '}{usd(MAX_USD_PER_IMAGE)} ceiling per image.
+                  {' '}{usd(ceilingUsd(meta))} ceiling per image.
                 </>
               )}
               {meta.acceptsControls.length === 0 && (
@@ -440,6 +502,42 @@ export function RenderModal() {
               )}
             </div>
 
+            {subjects.length > 0 && (
+              <div className="ai-photos" id="aiPhotos">
+                <div className="row" style={{ marginBottom: 4 }}>
+                  <span className="lbl">Photos</span>
+                  <span className="ai-photos-count">
+                    {slots === 0
+                      ? `${meta.label} takes none`
+                      : `${pics.length} of ${slots} slot${slots === 1 ? '' : 's'} used`}
+                  </span>
+                </div>
+                {subjects.map(sub => (
+                  <PhotoPick
+                    key={sub.objId} subject={sub} slots={slots}
+                    sent={pics.filter(a => a.objId === sub.objId)}
+                    on={!off.has(sub.objId)}
+                    onToggle={() => rs().patch({
+                      photoOff: off.has(sub.objId)
+                        ? photoOff.filter(id => id !== sub.objId)
+                        : [...photoOff, sub.objId],
+                    })}
+                  />
+                ))}
+                <div className="hint" id="aiPhotoNote">
+                  {slots === 0
+                    ? <>{meta.label} has one image input and the plan is in it, so no photograph can
+                      {' '}be sent. Switch to FLUX.2 to use them.</>
+                    : pics.length < subjects.reduce((n, x) => n + x.photos.length, 0)
+                      ? <>Every ticked object sends its first photo before any object sends a second.
+                        {' '}What did not fit is untouched — render one room at a time to reach it.</>
+                      : <>Each photo goes as its own reference image, named in the brief as the object
+                        {' '}it shows. The plan still decides where things are; the photo decides what
+                        {' '}they look like.</>}
+                </div>
+              </div>
+            )}
+
             <label className="tg">
               <input type="checkbox" id="aiFurn" checked={furniture} onChange={e => rs().patch({ furniture: e.target.checked })} />
               <span className="sw2" /><span>List the furniture</span>
@@ -455,10 +553,6 @@ export function RenderModal() {
             <label className="tg">
               <input type="checkbox" id="aiLabels" checked={roomLabels} onChange={e => rs().patch({ roomLabels: e.target.checked })} />
               <span className="sw2" /><span>Room names on the image</span>
-            </label>
-            <label className="tg">
-              <input type="checkbox" id="aiImgLabels" checked={imgLabels} onChange={e => rs().patch({ imgLabels: e.target.checked })} />
-              <span className="sw2" /><span>Object names on the image</span>
             </label>
 
             <textarea className="src" id="aiPrompt" spellCheck={false} style={{ marginTop: 10 }}
@@ -518,13 +612,9 @@ export function RenderModal() {
                   Generate now does for you — but the copy buttons are still the way out to
                   any other generator, so the sentence explains the picture instead. */}
               The layout every render is held to. <b>Copy image</b> takes it elsewhere.
-              {imgLabels && (
-                <>
-                  <br />The object names tell the model which block is which, and the prompt
-                  {' '}calls them a key to read rather than draw. If one shows up written into a
-                  {' '}render, turn <b>Object names on the image</b> off.
-                </>
-              )}
+              {' '}Nothing on it is written: every object is named in the prompt instead, with
+              {' '}where it sits. Anything we letter onto this picture gets drawn into the render —
+              {' '}numbered discs came back as black roundels on the floor.
               {imgMeasures && (
                 <>
                   <br />Lettering on the reference can bleed into the render — turn
@@ -619,3 +709,46 @@ export function RenderModal() {
 }
 
 export { planFacts };
+
+/** One row of the object-photo list: a tick, a thumbnail, what it is, and the
+ *  image number it will be in the request.
+ *
+ *  The number is the point of the row. Everything else in this panel can be
+ *  understood without it, but the brief says "image 3 is the sofa" — and if the
+ *  person cannot see which picture image 3 is, they have no way to tell a wrong
+ *  render from a wrongly numbered one. */
+function PhotoPick({ subject, slots, sent, on, onToggle }: {
+  subject: PhotoSubject; slots: number; sent: AttachedPhoto[]; on: boolean; onToggle: () => void;
+}) {
+  const project = useEditor(s => s.project);
+  const { url, missing } = usePhotoState(project?.id ?? '', subject.photos[0]?.id ?? '');
+  /* Ticked but with nothing sent is the case worth showing: the object is in and
+     the slots ran out before it. Silence there would read as "not chosen".
+     `gone` is the worse case and the one that used to be invisible until
+     Generate refused: the reference is in the document but the bytes are not on
+     this device, because they were attached elsewhere or never finished
+     uploading. */
+  const state = missing ? 'gone' : !on ? 'off' : sent.length ? 'on' : 'full';
+  return (
+    <label className={`ai-photo ${state}`} data-obj={subject.objId}>
+      <input type="checkbox" checked={on && !missing} disabled={slots === 0 || missing} onChange={onToggle} />
+      <span className="ai-photo-shot">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        {url ? <img src={url} alt="" /> : <i />}
+      </span>
+      <span className="ai-photo-what">
+        <b>{subject.label}</b>
+        {subject.room ? <em>{subject.room}</em> : null}
+      </span>
+      <span className="ai-photo-n">
+        {state === 'gone'
+          ? 'not on this device'
+          : state === 'on'
+            ? sent.map(a => `image ${a.n}`).join(', ')
+            : state === 'full'
+              ? 'no slot left'
+              : `${subject.photos.length} photo${subject.photos.length === 1 ? '' : 's'}`}
+      </span>
+    </label>
+  );
+}

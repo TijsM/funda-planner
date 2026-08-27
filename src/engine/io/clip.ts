@@ -16,6 +16,14 @@ export const PASTE_OFFSET = 25;
 export interface ClipObjects {
   mark: string;
   kind: 'objects';
+  /** The plan this was copied from, when the copier knew it.
+   *
+   *  Only object photos read it. A `PhotoRef` names bytes that live per plan, so
+   *  a paste into a DIFFERENT plan has to copy those bytes across before the
+   *  reference means anything — see `adoptPhotos` in `src/shell/photos.ts`.
+   *  Optional because a clip written by an older build does not have it, and the
+   *  honest reading of "no origin" is "assume it is not this one". */
+  project?: string;
   walls: Wall[]; areas: Area[]; items: Item[]; notes: Note[]; dims: Dim[]; lines: Line[];
   /** An opening has no position of its own — it is a hole in a wall. The wall it
    *  came from is remembered so a paste on the same floor puts it back there. */
@@ -24,7 +32,7 @@ export interface ClipObjects {
   cx: number; cy: number;
 }
 
-export interface ClipFloor { mark: string; kind: 'floor'; floor: Floor }
+export interface ClipFloor { mark: string; kind: 'floor'; floor: Floor; project?: string }
 
 export type Clip = ClipObjects | ClipFloor;
 
@@ -41,10 +49,11 @@ function openingPt(w: Wall, op: Opening): Pt {
   return { x: w.a.x + (w.b.x - w.a.x) * op.at, y: w.a.y + (w.b.y - w.a.y) * op.at };
 }
 
-export function clipOfSelection(f: Floor, sel: SelRef[]): ClipObjects | null {
+export function clipOfSelection(f: Floor, sel: SelRef[], projectId?: string): ClipObjects | null {
   const objs = resolveSel(f, sel);
   if (!objs.length) return null;
   const c = emptyClip();
+  if (projectId) c.project = projectId;
   const pts: Pt[] = [];
 
   for (const o of objs) {
@@ -76,7 +85,8 @@ export function clipOfSelection(f: Floor, sel: SelRef[]): ClipObjects | null {
   return c;
 }
 
-export const clipOfFloor = (f: Floor): ClipFloor => ({ mark: CLIP_MARK, kind: 'floor', floor: clone(f) });
+export const clipOfFloor = (f: Floor, projectId?: string): ClipFloor =>
+  ({ mark: CLIP_MARK, kind: 'floor', floor: clone(f), ...(projectId ? { project: projectId } : {}) });
 
 export const clipText = (c: Clip) => JSON.stringify(c);
 

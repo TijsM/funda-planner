@@ -1,5 +1,5 @@
-import type { Area, Floor, Item, Project, Pt, SelObj, SelRef, Shape, Wall } from './types';
-import { bboxOf, polyArea, R2, uid } from './geometry';
+import type { Area, Floor, Item, PhotoRef, Project, Pt, SelObj, SelRef, Shape, Wall } from './types';
+import { bboxOf, polyArea, R2, rotPt, uid } from './geometry';
 import { CAT_BY_KIND, GROUP_TONE, ROOM_SWATCHES, toneFor } from './catalog';
 
 export const SCHEMA = 2;
@@ -61,6 +61,51 @@ export function setDesc(o: Item | Area, v: string): void {
   if (String(v).trim()) o.desc = v; else delete o.desc;
 }
 
+/* ── photographs of the real object ─────────────────────────────── */
+
+/** Never null, never a fresh array per call for an object that has none: this is
+ *  read on every repaint of the toolbar and every rebuild of the brief. */
+export const photosOf = (o: { photos?: PhotoRef[] }): PhotoRef[] => o.photos ?? EMPTY;
+const EMPTY: PhotoRef[] = [];
+
+export const hasPhotos = (o: { photos?: PhotoRef[] }): boolean => !!o.photos?.length;
+
+/** Appends, because the array's order IS the priority and a photo added later is
+ *  not more important than the one that is already primary. */
+export function addPhotoRef(o: Item | Area, p: PhotoRef): void {
+  o.photos = [...photosOf(o), p];
+}
+
+/** Drops the reference and answers the ids that are now unreferenced BY THIS
+ *  OBJECT — the caller decides whether to delete the bytes, because undo brings
+ *  the reference back and a duplicate of the object may hold the same id. */
+export function removePhotoRef(o: Item | Area, id: string): void {
+  const left = photosOf(o).filter(p => p.id !== id);
+  if (left.length) o.photos = left; else delete o.photos;
+}
+
+/** Moves one photo to a new index — which is how a person says "this is the
+ *  angle that matters", since index 0 is what goes when slots are short. */
+export function movePhoto(o: Item | Area, id: string, to: number): void {
+  const list = photosOf(o).slice();
+  const from = list.findIndex(p => p.id === id);
+  if (from < 0) return;
+  const [p] = list.splice(from, 1);
+  list.splice(Math.max(0, Math.min(list.length, to)), 0, p);
+  o.photos = list;
+}
+
+/** Every photo id the document still points at, across every floor. What
+ *  `sweepOrphans` measures the store against — an id in the store and not in
+ *  here is bytes nothing can ever show again. */
+export function referencedPhotoIds(p: Project): Set<string> {
+  const ids = new Set<string>();
+  (p.floors ?? []).forEach(f => {
+    [...(f.items ?? []), ...(f.areas ?? [])].forEach(o => photosOf(o).forEach(ph => ids.add(ph.id)));
+  });
+  return ids;
+}
+
 /** Places a shape a person drew. The drawing is copied onto the item rather than
  *  referenced — see `Item.shape` for why — and the tone is the one the catalogue
  *  uses for anything it has no group for, so a custom object reads as an object
@@ -83,6 +128,17 @@ export function makeItem(kind: string, at: Pt): Item {
 
 /* ── bounds ─────────────────────────────────────────────────────── */
 
+/** The four corners an item actually occupies, rotation included. */
+export function itemCorners(i: Item): Pt[] {
+  const hw = i.w / 2, hh = i.h / 2;
+  const local: Pt[] = [{ x: -hw, y: -hh }, { x: hw, y: -hh }, { x: hw, y: hh }, { x: -hw, y: hh }];
+  if (!i.rot) return local.map(p => ({ x: i.x + p.x, y: i.y + p.y }));
+  return local.map(p => {
+    const r = rotPt(p.x, p.y, i.rot);
+    return { x: i.x + r.x, y: i.y + r.y };
+  });
+}
+
 export function contentBBox(f: Floor | null | undefined) {
   if (!f) return null;
   const pts: Pt[] = [];
@@ -90,10 +146,42 @@ export function contentBBox(f: Floor | null | undefined) {
   f.areas.forEach(a => pts.push(...a.poly));
   f.lines.forEach(l => { pts.push(l.a, l.b); });
   f.dims.forEach(d => { pts.push(d.a, d.b); });
+  /* A circumscribed circle, deliberately: this is the bound the editor fits the
+     view to and the importer normalises against, and a bound that grows and
+     shrinks as an object is rotated under the cursor makes the canvas jump. The
+     cost is slack — half a metre or more around a long thin object — which is
+     why `drawnBBox` below exists for the one caller that cannot afford it. */
   f.items.forEach(i => {
     const r = Math.hypot(i.w, i.h) / 2;
     pts.push({ x: i.x - r, y: i.y - r }, { x: i.x + r, y: i.y + r });
   });
+  f.notes.forEach(n => pts.push({ x: n.x - 60, y: n.y - 20 }, { x: n.x + 60, y: n.y + 20 }));
+  if (f.ref) pts.push({ x: f.ref.x, y: f.ref.y }, { x: f.ref.x + f.ref.w, y: f.ref.y + f.ref.h });
+  return pts.length ? bboxOf(pts) : null;
+}
+
+/** The bounds of what is actually drawn, to the pixel: every item by its real
+ *  rotated corners rather than by the circle it would sweep if it spun.
+ *
+ *  This exists because of a measured failure. Framing the conditioning image on
+ *  `contentBBox` let a 265 cm staircase and a 260 cm bookshelf standing against
+ *  the east wall push the bounds 130 cm PAST that wall, and every long thin
+ *  object did the same — so a 6.2 × 11.2 m house was framed as 8.3 m wide. That
+ *  is a metre of blank paper down each side of the picture the image model is
+ *  told to copy, and the model does not leave blank paper alone: it filled the
+ *  bands with an invented title block and dimension chains of its own, and it
+ *  read the building's aspect as 1:1.38 instead of 1:1.81 and drew it that wide.
+ *
+ *  `planFrame` already refused to count ink it does not draw. This is the same
+ *  rule for ink it does draw. */
+export function drawnBBox(f: Floor | null | undefined) {
+  if (!f) return null;
+  const pts: Pt[] = [];
+  f.walls.forEach(w => { pts.push(w.a, w.b); });
+  f.areas.forEach(a => pts.push(...a.poly));
+  f.lines.forEach(l => { pts.push(l.a, l.b); });
+  f.dims.forEach(d => { pts.push(d.a, d.b); });
+  f.items.forEach(i => pts.push(...itemCorners(i)));
   f.notes.forEach(n => pts.push({ x: n.x - 60, y: n.y - 20 }, { x: n.x + 60, y: n.y + 20 }));
   if (f.ref) pts.push({ x: f.ref.x, y: f.ref.y }, { x: f.ref.x + f.ref.w, y: f.ref.y + f.ref.h });
   return pts.length ? bboxOf(pts) : null;

@@ -10,7 +10,7 @@ import {
   type JobState, type PollResponse, type RenderJob,
 } from '@state/renders';
 import {
-  CONTROL_KINDS, DEFAULT_PROVIDER, MAX_USD_PER_IMAGE, PROVIDER_META, estimateUsd, metaOf,
+  CONTROL_KINDS, DEFAULT_PROVIDER, PROVIDER_META, ceilingUsd, estimateUsd, metaOf,
   modelLabelOf, type ControlKind,
 } from '@data/providers';
 import { fmlToProject } from '@engine/index';
@@ -28,7 +28,7 @@ import type { RenderRecord, RenderSettings } from '@shell/renders';
 
 const SETTINGS: RenderSettings = {
   view: 'top', room: '*', style: '', furniture: true,
-  dimensions: true, roomLabels: false, imgMeasures: true, imgLabels: true,
+  dimensions: true, roomLabels: false, imgMeasures: true,
   provider: DEFAULT_PROVIDER, controls: [], controlScale: DEFAULT_CONTROL_SCALE,
 };
 
@@ -372,9 +372,9 @@ describe('"use these settings"', () => {
     expect(applySettings({ ...record, seed: null }, 'p1', 0).seed).toBe('');
   });
 
-  it('carries exactly the eleven settings, and nothing else from the store', () => {
-    expect(Object.keys(settingsOf({ ...STORE, style: 'x', imgLabels: true })).sort())
-      .toEqual(['controlScale', 'controls', 'dimensions', 'furniture', 'imgLabels', 'imgMeasures',
+  it('carries exactly the ten settings, and nothing else from the store', () => {
+    expect(Object.keys(settingsOf({ ...STORE, style: 'x' })).sort())
+      .toEqual(['controlScale', 'controls', 'dimensions', 'furniture', 'imgMeasures',
         'provider', 'room', 'roomLabels', 'style', 'view']);
   });
 
@@ -382,7 +382,7 @@ describe('"use these settings"', () => {
      handed one of them, and re-running that receipt then attached maps the picture
      never had — a re-run that is not a re-run. */
   it('records the maps that were sent, not the ones that were ticked', () => {
-    const chosen = { ...STORE, imgLabels: true, provider: 'flux-general-cn', controls: ['seg', 'depth', 'line'] as ControlKind[] };
+    const chosen = { ...STORE, provider: 'flux-general-cn', controls: ['seg', 'depth', 'line'] as ControlKind[] };
     expect(settingsOf(chosen).controls).toEqual(['seg', 'depth', 'line']);
     expect(submittedSettings(chosen).controls).toEqual(['depth']);
     /* and nothing else about the settings is touched on the way through */
@@ -393,18 +393,19 @@ describe('"use these settings"', () => {
      receipt that changes when someone ticks another map, and re-running it would
      then send maps the render never had. */
   it('copies the control list instead of aliasing the store\'s', () => {
-    const live = { ...STORE, imgLabels: true, controls: ['line'] as ControlKind[] };
+    const live = { ...STORE, controls: ['line'] as ControlKind[] };
     const captured = settingsOf(live);
     live.controls.push('depth');
     expect(captured.controls).toEqual(['line']);
   });
 
-  /* Every render made before the flag existed was made without the labels, and
-     "use these settings" has to reproduce that rather than inherit whatever is
-     on screen now. */
-  it('re-runs a record written before object names existed without them', () => {
-    const old = { ...record, settings: { ...SETTINGS, imgLabels: undefined } };
-    expect(applySettings(old, 'p1', 0).imgLabels).toBe(false);
+  /* The reference carries no annotation on any setting now, so there is no flag
+     left to restore. A record written in the window when it did keeps the key —
+     it is a fact about how that render was made — and "use these settings" simply
+     has nothing to do with it. */
+  it('ignores the retired annotation flag on an old record', () => {
+    const old = { ...record, settings: { ...SETTINGS, imgLabels: true } };
+    expect('imgLabels' in applySettings(old, 'p1', 0)).toBe(false);
   });
 });
 
@@ -540,7 +541,10 @@ describe('the size the panel asks for', () => {
         const d = outputDims(w, h, p.id);
         const cost = estimateUsd(p, d.width, d.height);
         expect(cost).not.toBeNull();
-        expect(cost!).toBeLessThanOrEqual(MAX_USD_PER_IMAGE);
+        /* Each provider's own ceiling: a model that bills for the images it is
+           HANDED cannot be held to a number set for models that bill only for
+           the one they draw — see `ProviderMeta.maxUsdPerImage`. */
+        expect(cost!, p.id).toBeLessThanOrEqual(ceilingUsd(p));
         expect(d.width % p.dimStep).toBe(0);
         expect(d.height % p.dimStep).toBe(0);
       }
@@ -560,12 +564,12 @@ describe('the size the panel asks for', () => {
   /* The ceiling does not bite at 1 MP on anything today, which is exactly why this
      asks for three: the guard is invisible until the day the target moves or a
      vendor's price does, and an invisible guard is one nobody notices removing. */
-  it('will not aim above what a dime buys, even when asked for three megapixels', () => {
+  it('will not aim above what the ceiling buys, even when asked for three megapixels', () => {
     for (const p of PROVIDER_META) {
       const d = outputDims(1800, 1013, p.id, 3_000_000);
       const cost = estimateUsd(p, d.width, d.height);
       expect(cost).not.toBeNull();
-      expect(cost!).toBeLessThanOrEqual(MAX_USD_PER_IMAGE);
+      expect(cost!, p.id).toBeLessThanOrEqual(ceilingUsd(p));
     }
     /* The same request, two sizes: [max] has 1.43 MP of headroom under a dime,
        and flux-general has exactly one whole megapixel because it rounds up. */
@@ -665,7 +669,9 @@ describe('the conditioning images', () => {
   });
   afterAll(() => { (globalThis as { document?: unknown }).document = realDoc; });
 
-  const REF = { furniture: true, roomLabels: false, imgMeasures: false, imgLabels: true };
+  /* `room` is in here because the numbering on the picture is scoped the way the
+     brief is: a room-scoped render numbers that room's objects and no others. */
+  const REF = { furniture: true, roomLabels: false, imgMeasures: false, imgLabels: true, room: '*' };
 
   it('frames every control map exactly like the reference beside it', () => {
     const opts = files.referenceOpts(REF);

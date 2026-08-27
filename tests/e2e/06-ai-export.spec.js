@@ -86,14 +86,14 @@ test.describe('export for an image generator', () => {
     await page.waitForTimeout(300);
 
     let p = await page.locator('#aiPrompt').inputValue();
-    expect(p.toLowerCase()).toContain('sofa 3-seat');
-    expect(p.toLowerCase()).toContain('table 6p');
+    expect(p.toLowerCase()).toContain('three-seat sofa');
+    expect(p.toLowerCase()).toContain('dining table with six chairs');
     expect(p).toMatch(/225×95 cm/);
 
     await page.locator('.tg:has(#aiFurn)').click();          // list the furniture: off
     await page.waitForTimeout(250);
     p = await page.locator('#aiPrompt').inputValue();
-    expect(p.toLowerCase()).not.toContain('sofa 3-seat');
+    expect(p.toLowerCase()).not.toContain('three-seat sofa');
 
     await page.locator('.tg:has(#aiDims)').click();          // measurements: off
     await page.waitForTimeout(250);

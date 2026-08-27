@@ -54,6 +54,9 @@ export function Canvas() {
     paint(ctx, {
       floor, view: s.view, width: w, height: h, dpr,
       layers: s.layers, grid: s.grid, live: true,
+      /* Only here. Every other caller of `paint` is producing a picture for
+         something other than a person looking at the editor — see `photoMarks`. */
+      photoMarks: true,
       refImage: s.showRef ? refImg.current[floor.id] ?? null : null,
       refOpacity: s.refOpacity,
       ghost: below,

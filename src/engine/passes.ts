@@ -36,6 +36,8 @@ export interface PassInput {
   pass: PassKind;
   /** off for a reference of the empty shell; the walls stay either way */
   furniture?: boolean;
+  /** the room the brief is scoped to, so the pass frames what the brief describes */
+  room?: string;
 }
 
 /* ── the numbers every pass agrees on ───────────────────────────── */
@@ -288,11 +290,12 @@ export function paintPass(g: Ctx, input: PassInput): void {
   const items = furniture ? f.items : [];
 
   if (pass === 'ink') {
-    /* One code path with the app's reference image, so the harness measures
-       what we actually send. Text-free on purpose and not on a flag: the app
-       may letter its reference (`imgLabels` in prompt.ts trades the bleed for
-       naming the blocks), but a control set has no such bargain to strike —
-       every other pass here would carry the same lettering into the structure. */
+    /* One code path with the app's reference image, so the harness measures what
+       we actually send — and what we send carries no glyphs at all. It used to
+       carry numbered discs; the model painted them into the render as black
+       roundels on the floor, which is the same failure the captions had before
+       them in a louder font. Every pass here is a control channel, and a mark in
+       a control channel is geometry. */
     paint(g, {
       floor: f,
       view: frame.view,
