@@ -1,3 +1,4 @@
+import type { Cam } from '@engine/camera';
 import type { ViewKind } from '@engine/prompt';
 import type { ControlKind } from '@data/providers';
 import { ed } from '@state/store';
@@ -36,6 +37,18 @@ export const IDX_CREATED = 'byCreatedAt';
 
 export interface RenderSettings {
   view: ViewKind;
+  /** Where the virtual camera stood, for the eye-level view — the whole of what
+   *  makes one of those renders reproducible, since a brief that says "in the
+   *  living room looking at the windows" describes a hundred pictures and this
+   *  describes one.
+   *
+   *  A render setting rather than part of the document, so a plan can be shot
+   *  from anywhere without the shot becoming part of the plan. It is in the
+   *  record and not just in the store because "use these settings" has to put
+   *  the camera back where it was; absent on every record made from a top-down,
+   *  isometric or sketch view, and on every eye-level one made before there was
+   *  a camera to place. */
+  camera?: Cam;
   /** an area id, or '*' for the whole floor — the same shape buildPrompt() takes */
   room: string;
   style: string;

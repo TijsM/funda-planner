@@ -441,8 +441,13 @@ describe('paintPass', () => {
     it('never gives two catalogue groups the same colour', () => {
       /* A fixed set of keys, so a collision here is a static fact rather than
          bad luck — and it would merge, say, every bathroom fitting into the
-         staircase. Adding a group is what would break this. */
-      const keys = [...CATALOG.map(g => g.group), 'Other', 'door', 'window'];
+         staircase. Adding a group is what would break this.
+
+         'ceiling' is only laid down by the eye-level pass in `pov.ts`, which
+         shares this palette on purpose: a room that is one colour from above and
+         another from inside is two rooms to an encoder. It is checked here
+         because that is where the collision question lives. */
+      const keys = [...CATALOG.map(g => g.group), 'Other', 'door', 'window', 'ceiling'];
       expect(new Set(keys.map(segObjectColor)).size).toBe(keys.length);
     });
 

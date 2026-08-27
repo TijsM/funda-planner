@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { attachedPhotos, photoSlots } from '@state/renders';
+import { attachedPhotos, photoSlots, subjectsInShot } from '@state/renders';
 import { PROVIDER_META } from '@data/providers';
 import type { PhotoSubject } from '@engine/prompt';
+import { newCam } from '@engine/camera';
+import { makeItem, newProject } from '@engine/model';
+import type { Floor } from '@engine/types';
 
 /** Who gets a reference slot, and in what order.
  *
@@ -128,5 +131,68 @@ describe('provider metadata', () => {
       expect(Number.isInteger(p.maxReferences), p.id).toBe(true);
       expect(p.maxReferences, p.id).toBeGreaterThanOrEqual(1);
     }
+  });
+});
+
+/** Which photographs a render can honestly carry — and it is a question about
+ *  the picture, not about the provider's budget above.
+ *
+ *  The rule this pins is WHEN the narrowing applies. `RenderModal` lists what
+ *  will be sent and `jobs.ts` sends it; both go through this one function, and
+ *  a panel that disagrees with the request about which image is the sofa is
+ *  worse than either alone. */
+describe('subjectsInShot', () => {
+  const room = (): Floor => {
+    const f = newProject('t').floors[0];
+    const W = (ax: number, ay: number, bx: number, by: number) =>
+      ({ id: `w${ax}${ay}${bx}${by}`, a: { x: ax, y: ay }, b: { x: bx, y: by }, t: 20, openings: [] });
+    f.walls = [W(0, 0, 600, 0), W(600, 0, 600, 700), W(600, 700, 0, 700), W(0, 700, 0, 0)];
+    f.items = [
+      { ...makeItem('sofa3', { x: 300, y: 500 }), id: 'ahead' },
+      { ...makeItem('sofa3', { x: 300, y: 40 }), id: 'behind' },
+    ];
+    return f;
+  };
+  const subs = [sub('ahead', 1), sub('behind', 1)];
+  const cam = newCam({ x: 300, y: 100, z: 155, yaw: 90 });
+
+  it('drops what the camera cannot see', () => {
+    const out = subjectsInShot(room(), { view: 'eye', camera: cam }, subs);
+    expect(out.map(x => x.objId)).toEqual(['ahead']);
+  });
+
+  /** Every object in scope is in a top-down or isometric picture, so there is
+   *  nothing to narrow — and a stored camera must not quietly start deciding
+   *  which photographs a plan drawing carries. */
+  it('keeps everything on a view that has no camera in it', () => {
+    for (const view of ['top', 'iso', 'sketch'] as const) {
+      expect(subjectsInShot(room(), { view, camera: cam }, subs).map(x => x.objId), view)
+        .toEqual(['ahead', 'behind']);
+    }
+  });
+
+  it('keeps everything when no camera has been placed', () => {
+    expect(subjectsInShot(room(), { view: 'eye', camera: null }, subs).map(x => x.objId))
+      .toEqual(['ahead', 'behind']);
+  });
+
+  it('preserves the order the slots are meant to be spent in', () => {
+    const f = room();
+    f.items.push({ ...makeItem('coffee', { x: 300, y: 400 }), id: 'table' });
+    const many = [sub('table', 1), sub('ahead', 1), sub('behind', 1)];
+    expect(subjectsInShot(f, { view: 'eye', camera: cam }, many).map(x => x.objId))
+      .toEqual(['table', 'ahead']);
+  });
+
+  /** The consequence that costs money: what is out of shot must not take a slot
+   *  from what is in it. Two slots and three candidates, one of them behind the
+   *  lens — the two in front should get them. */
+  it('frees the slot an out-of-shot object would have taken', () => {
+    const f = room();
+    f.items.push({ ...makeItem('coffee', { x: 300, y: 400 }), id: 'table' });
+    const all = [sub('behind', 1), sub('ahead', 1), sub('table', 1)];
+    const seen = subjectsInShot(f, { view: 'eye', camera: cam }, all);
+    /* 'behind' led the list and would have had the first slot of any budget */
+    expect(attachedPhotos('flux2-max', [], seen).map(a => a.objId)).toEqual(['ahead', 'table']);
   });
 });

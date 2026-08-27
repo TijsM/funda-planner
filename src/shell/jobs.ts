@@ -2,7 +2,8 @@ import { uid } from '@engine/geometry';
 import { ed } from '@state/store';
 import {
   POLL_TIMEOUT_MESSAGE, POLL_TIMEOUT_MS, acceptJob, applyPoll, attachedPhotos, busy, failJob,
-  inFlight, nextSeed, outputDims, pollDelay, rs, startJob, submittedSettings, timedOut,
+  inFlight, nextSeed, outputDims, pollDelay, rs, startJob, subjectsInShot, submittedSettings,
+  timedOut,
   type PollResponse, type RenderJob,
 } from '@state/renders';
 import { photoSubjects } from '@engine/prompt';
@@ -413,7 +414,14 @@ export async function startRender(canvas: HTMLCanvasElement | null): Promise<voi
      view, and what gets paid for must not depend on one having been open.
      Synchronous, so it can be part of the record before the slot is claimed;
      reading the bytes is the slow half and happens below. */
-  const picked = attachedPhotos(base.provider, kinds, photoSubjects(floor, base.room), new Set(r.photoOff));
+  /* Narrowed to what the camera can see before the slots are handed out, so an
+     object out of shot does not take a slot from one that is in it — and, on the
+     eye-level view, so we are not billed for a photograph of the next room. */
+  const picked = attachedPhotos(
+    base.provider, kinds,
+    subjectsInShot(floor, base, photoSubjects(floor, base.room)),
+    new Set(r.photoOff),
+  );
   /* The ids that go, in the order they go: the row's answer to "which of my
      sofas is in this picture". */
   const settings: typeof base = { ...base, photos: picked.map(p => p.id) };

@@ -1,4 +1,8 @@
 import { create } from 'zustand';
+import type { Cam } from '@engine/camera';
+import { normaliseCam } from '@engine/camera';
+import { idsInShot } from '@engine/pov';
+import type { Floor } from '@engine/types';
 import type { PhotoSubject, ViewKind } from '@engine/prompt';
 import {
   CONTROL_KINDS, DEFAULT_PROVIDER, maxAffordablePixels, metaOf, type ControlKind,
@@ -104,6 +108,36 @@ export function photoSlots(
   const meta = metaOf(provider);
   const spare = Math.max(0, meta.maxReferences - 1);
   return Math.max(0, spare - promptControls(provider, kinds).length);
+}
+
+/** The photographed objects this render can actually show, out of the ones in
+ *  scope — everything, except on an eye-level view with a camera placed, where
+ *  it is what the camera can see.
+ *
+ *  A photograph is an instruction about one object in the picture. On a top-down
+ *  or isometric view every object in scope is in the picture, so the question
+ *  does not arise. Point a camera at one end of a living room and it stops being
+ *  academic in two ways at once:
+ *
+ *  - The photograph of a sofa that is behind the lens is an instruction to draw
+ *    a sofa that is not in shot, sent to a model documented to read every input
+ *    image as something to reproduce. What comes back is a second sofa.
+ *  - It is billed. BFL meters INPUT megapixels as well as output, so six
+ *    photographs of things in other rooms turned a $0.069 render into a $0.28
+ *    one — measured, on the very first eye-level render anyone ran.
+ *
+ *  Both call sites go through here rather than filtering for themselves: the
+ *  panel lists what will be sent and `jobs.ts` sends it, and a panel that
+ *  disagrees with the request about which image is the sofa is worse than
+ *  either alone. Which is the same argument `photoSubjects` is written under. */
+export function subjectsInShot(
+  floor: Floor,
+  s: Pick<RenderSettings, 'view'> & { camera?: Cam | null },
+  subjects: readonly PhotoSubject[],
+): PhotoSubject[] {
+  if (s.view !== 'eye' || !s.camera) return [...subjects];
+  const seen = idsInShot(floor, normaliseCam(s.camera));
+  return subjects.filter(x => seen.has(x.objId));
 }
 
 /** One photograph on its way out, with the image number the brief will call it. */
@@ -355,6 +389,13 @@ export function nextSeed(text: string, locked: boolean): number {
 
 export interface RenderState extends JobState {
   view: ViewKind;
+  /** Where the eye-level camera stands, or null until one has been placed.
+   *
+   *  Null is a real state and not a missing default: `autoCam` needs a floor to
+   *  guess from and this store has never heard of one, so the panel fills it in
+   *  when it opens on a plan. Everything downstream treats a null camera as "no
+   *  eye-level picture is available", which is what it is. */
+  camera: Cam | null;
   /** an area id, or '*' for the whole floor */
   room: string;
   style: string;
@@ -406,6 +447,7 @@ export interface RenderState extends JobState {
 
 export const useRenders = create<RenderState>(set => ({
   view: 'top',
+  camera: null,
   room: '*',
   style: '',
   furniture: true,
@@ -458,9 +500,18 @@ export const rs = () => useRenders.getState();
 
 export function settingsOf(s: Pick<RenderState,
   'view' | 'room' | 'style' | 'furniture' | 'dimensions' | 'roomLabels' | 'imgMeasures'
-  | 'provider' | 'controls' | 'controlScale'>): RenderSettings {
+  | 'provider' | 'controls' | 'controlScale'>
+  /* Widened rather than picked off the store, so a stored `RenderSettings` — where
+     the field is optional and absent — round-trips through here unchanged. */
+  & { camera?: Cam | null }): RenderSettings {
   return {
     view: s.view, room: s.room, style: s.style, furniture: s.furniture,
+    /* Only on the view that has a camera in it. Recording where the camera
+       happened to be sitting on a top-down render would put a field in the
+       receipt that had no effect on the picture, and "use these settings" would
+       then restore a viewpoint that never took one. Copied, not aliased, for the
+       reason the controls array is. */
+    ...(s.view === 'eye' && s.camera ? { camera: { ...normaliseCam(s.camera) } } : {}),
     dimensions: s.dimensions, roomLabels: s.roomLabels, imgMeasures: s.imgMeasures,
     provider: s.provider,
     /* The kinds as chosen, not as attached: what the provider could take is a
@@ -509,6 +560,12 @@ export function promptKeyOf(projectId: string, floorId: string, rev: number, s: 
      hand-edited prompt for no change at all. */
   return JSON.stringify([projectId, floorId, rev, s.view, s.room, s.style, s.furniture,
     s.dimensions, promptControls(s.provider, s.controls ?? []),
+    /* The camera, on the one view whose brief describes it. An eye-level brief
+       names the room the lens is standing in and what it is pointed at, so moving
+       the camera changes the words; on every other view it changes nothing, and
+       rebuilding would throw away a hand-edited prompt for no change at all —
+       the same rule the image toggles are held to above. */
+    s.view === 'eye' ? s.camera ?? null : null,
     /* The photographs are in here as the ids that will actually be attached, for
        the same reason the maps are: the brief names each one and numbers it, so a
        photo added, unticked or bumped out of the last slot changes the words. It
@@ -543,6 +600,9 @@ export function applySettings(rec: RenderRecord, projectId: string, rev: number)
     provider: rec.settings.provider ?? DEFAULT_PROVIDER,
     controls: [...(rec.settings.controls ?? [])],
     controlScale: rec.settings.controlScale ?? DEFAULT_CONTROL_SCALE,
+    /* An eye-level record made before there was a camera restores as null, and
+       the panel guesses one for it — which is the same thing that render got. */
+    camera: rec.settings.camera ? normaliseCam(rec.settings.camera) : null,
     prompt: rec.prompt,
     promptKey: promptKeyOf(projectId, rec.floorId, rev, rec.settings),
     seed: rec.seed === null ? '' : String(rec.seed),

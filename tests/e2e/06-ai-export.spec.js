@@ -53,10 +53,64 @@ test.describe('export for an image generator', () => {
       await expect(page.locator(`#aiView button[data-v="${v}"]`)).toHaveClass(/on/);
     }
     expect(seen.top).toMatch(/top-down|bird/i);
-    expect(seen.eye).toMatch(/eye level|1\.6 m|24 mm/i);
+    /* The eye-level brief stopped guessing at a camera ("standing eye level,
+       wide-angle lens, looking towards the windows") the day the panel got a
+       real one: image 1 is now a grey massing render taken from a point on the
+       plan, and the brief says so instead. */
+    expect(seen.eye).toMatch(/where image 1 was shot|grey untextured 3D model/i);
     expect(seen.iso).toMatch(/isometric|dollhouse/i);
     expect(seen.sketch).toMatch(/watercolour|ink/i);
     expect(new Set(Object.values(seen)).size).toBe(4);       // all genuinely different
+  });
+
+  /* The eye-level view is the one that carries a camera, and the camera is the
+     whole of what makes one of those renders reproducible. Everything here is
+     about the picture that would actually be sent: that it is not the plan, that
+     it follows the camera, and that it goes back to being the plan the moment
+     the view does. */
+  test('places a camera for the eye-level view and renders what it sees', async ({ page }) => {
+    await importMocked(page);
+    await page.locator('#fchips .fchip').nth(1).click();
+    await page.waitForTimeout(250);
+    await openAI(page);
+
+    const shot = () => page.evaluate(() => document.querySelector('#aiImg')?.src ?? '');
+    const plan = await shot();
+    expect(plan.startsWith('data:image/png')).toBe(true);
+    await expect(page.locator('#aiCamMap')).toHaveCount(0);
+
+    await page.locator('#aiView button[data-v="eye"]').click();
+    await expect(page.locator('#aiCamMap')).toBeVisible();
+
+    /* Placed for you, standing in a room and pointed somewhere with a view —
+       the alternative to a good guess is dragging a cone about to find out what
+       the room looks like from anywhere at all. */
+    const cam = await page.evaluate(() => window.__renders().camera);
+    expect(cam).toBeTruthy();
+    expect(cam.fov).toBeGreaterThan(20);
+    await expect(page.locator('.cam-block .hint')).toContainText(/^In the /);
+
+    await expect.poll(shot, { timeout: 4000 }).not.toBe(plan);
+    const from = await shot();
+
+    /* A photograph's frame, not a plan's, whatever shape the building is */
+    const dims = await page.evaluate(() => {
+      const t = document.querySelector('#aiImg');
+      return [t.naturalWidth, t.naturalHeight];
+    });
+    expect(dims[0] / dims[1]).toBeCloseTo(1.5, 1);
+
+    /* Turn it round and it is a different picture — which is the feature */
+    await page.evaluate(() => {
+      const c = window.__renders().camera;
+      window.__renders().patch({ camera: { ...c, yaw: (c.yaw + 180) % 360 } });
+    });
+    await expect.poll(shot, { timeout: 4000 }).not.toBe(from);
+
+    /* and back to the plan when the view is not the one with a camera in it */
+    await page.locator('#aiView button[data-v="top"]').click();
+    await expect(page.locator('#aiCamMap')).toHaveCount(0);
+    await expect.poll(shot, { timeout: 4000 }).toBe(plan);
   });
 
   test('can be scoped to a single room', async ({ page }) => {

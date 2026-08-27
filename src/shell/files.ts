@@ -2,6 +2,8 @@ import type { Floor, Layers, Project } from '@engine/types';
 import { floorArea, shellBBox } from '@engine/model';
 import { fmtM2, R2 } from '@engine/geometry';
 import { framedFloor, planFrame } from '@engine/frame';
+import { normaliseCam, povFrame, type Cam } from '@engine/camera';
+import { paintPovPass, rasterizeFloor } from '@engine/pov';
 import { paintPass, type PassKind } from '@engine/passes';
 import { planFacts } from '@engine/prompt';
 import { paint } from '@engine/render';
@@ -72,6 +74,16 @@ export interface FloorCanvasOpts {
    *  `'ink'` draws the same picture the app's own reference does — both are
    *  glyph-free, and the harness measures what we actually send. */
   pass?: PassKind;
+  /** Draw what a camera standing inside the plan sees, instead of the plan.
+   *
+   *  Set, this replaces the whole top-down path: the frame is the camera's, the
+   *  five passes come out of `pov.ts` rather than `passes.ts`, and `clean`,
+   *  `layers`, `measures` and `roomLabels` mean nothing because none of them
+   *  describes anything an eye-level picture contains. Everything else about the
+   *  contract is unchanged — same function, same five kinds, same null for a
+   *  floor with nothing on it — which is what lets the modal, the control maps
+   *  and the job path choose between the two on one field. */
+  cam?: Cam | null;
 }
 
 /** Renders a floor to an offscreen canvas at print-ish resolution. `clean`
@@ -88,7 +100,28 @@ export function renderFloorCanvas(
 ): HTMLCanvasElement | null {
   const frameOpts = { maxPx: opts.maxPx ?? 3600, clean: opts.clean, measures: opts.measures };
   const frame = planFrame(f, frameOpts);
+  /* Asked before the camera branch, and used by it only as the emptiness test it
+     already is: a floor with nothing drawn on it has no reference image, and
+     standing a camera in the middle of it would produce a white rectangle that
+     costs a credit to discover. */
   if (!frame) return null;
+
+  if (opts.cam) {
+    const cam = normaliseCam(opts.cam);
+    /* One frame for the picture and for every map beside it, because `povFrame`
+       is a function of the camera and the size alone — the property `planFrame`
+       gives the top-down path, obtained here the same way. */
+    const pf = povFrame(cam, { maxPx: opts.maxPx ?? REFERENCE_MAX_PX });
+    const pcv = document.createElement('canvas');
+    pcv.width = pf.width;
+    pcv.height = pf.height;
+    const pctx = pcv.getContext('2d');
+    if (!pctx) return null;
+    paintPovPass(pctx, {
+      floor: f, frame: pf, pass: opts.pass ?? 'ink', furniture: opts.furniture !== false,
+    });
+    return pcv;
+  }
   /* The same floor the frame was measured from, or the picture carries ink the
      margin was never sized for — stranded dimension chains, the .fml's "©
      Zibber" note a couple of metres under the plan. `framedFloor` is where that
@@ -151,7 +184,11 @@ export const REFERENCE_MAX_PX = 1800;
  *  draws a dimension chain: it changes the margin the frame solves for, so
  *  leaving it out would frame the maps tighter than the picture they condition. */
 export function referenceOpts(
-  s: Pick<RenderSettings, 'furniture' | 'roomLabels' | 'imgMeasures' | 'room'>,
+  s: Pick<RenderSettings, 'furniture' | 'roomLabels' | 'imgMeasures' | 'room' | 'view'>
+  /* Widened past the record's own optional field, because the live one in the
+     store is explicitly null until a camera has been placed and a record never
+     stores that state at all. */
+  & { camera?: Cam | null },
 ): FloorCanvasOpts {
   return {
     clean: true,
@@ -161,6 +198,12 @@ export function referenceOpts(
     objectLabels: false,
     room: s.room,
     maxPx: REFERENCE_MAX_PX,
+    /* The camera on the one view that has one, and only when it has been placed.
+       An eye-level brief with no camera falls back to the plan drawing, which is
+       what this panel sent for that view before any of this existed — worse
+       conditioning, not a broken render, and the panel places a camera the
+       moment it opens so it is a state nobody should reach. */
+    cam: s.view === 'eye' ? s.camera ?? null : null,
   };
 }
 

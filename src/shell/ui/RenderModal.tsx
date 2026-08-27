@@ -4,13 +4,15 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ed, useEditor, useSelection } from '@state/store';
 import {
   SEED_MAX, applySettings, attachedControls, attachedPhotos, busy, outputDims, parseSeed,
-  photoSlots, promptControls, promptKeyOf, randomSeed, rs, settingsOf, useRenders,
+  photoSlots, promptControls, promptKeyOf, randomSeed, rs, settingsOf, subjectsInShot,
+  useRenders,
   type AttachedPhoto,
 } from '@state/renders';
 import {
   STYLE_PRESETS, buildPrompt, expandStyle, photoSubjects, planFacts,
   type PhotoSubject, type ViewKind,
 } from '@engine/prompt';
+import { CEILING_CM, autoCam, normaliseCam } from '@engine/camera';
 import { polyArea } from '@engine/geometry';
 import { fmtM2 } from '@engine/geometry';
 import { slug } from '@engine/io/serialize';
@@ -26,6 +28,7 @@ import { refreshRenders, startRender } from '../jobs';
 import { Icon } from './Icons';
 import { usePhotoState } from './photoUrls';
 import { fullUrlFor, releaseAllBut, urlFor } from './renderUrls';
+import { CameraMap, cameraNote } from './CameraMap';
 
 const VIEWS: { v: ViewKind; label: string }[] = [
   { v: 'top', label: 'Top-down' },
@@ -93,6 +96,7 @@ export function RenderModal() {
   const provider = useRenders(s => s.provider);
   const controls = useRenders(s => s.controls);
   const controlScale = useRenders(s => s.controlScale);
+  const camera = useRenders(s => s.camera);
   const photoOff = useRenders(s => s.photoOff);
   const prompt = useRenders(s => s.prompt);
   const seed = useRenders(s => s.seed);
@@ -137,6 +141,26 @@ export function RenderModal() {
     if (room !== '*' && !namedRooms.some(r => r.id === room)) rs().patch({ room: '*' });
   }, [room, namedRooms]);
 
+  /* A camera the moment one is needed, and never a second time.
+   *
+   *  `autoCam` stands it back in the room looking at the window, which is the
+   *  shot somebody would have taken — and the alternative to guessing is a
+   *  person dragging a cone around a minimap to discover what the room looks
+   *  like from anywhere at all. It re-guesses on a floor change and on a room
+   *  change, because a camera left standing in last floor's kitchen is aimed at
+   *  a wall, and never merely because the panel reopened: a camera somebody
+   *  placed is a decision, and re-guessing over it is the panel overruling them.
+   *
+   *  `room` is a dependency and `rev` deliberately is not. Choosing a room in the
+   *  picker is an instruction about what to photograph; editing the plan is not,
+   *  and moving somebody's camera every time they nudge a wall would make the
+   *  panel unusable while a plan is being drawn. */
+  useEffect(() => {
+    if (view !== 'eye' || !floor) return;
+    rs().patch({ camera: autoCam(floor, room) });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, floor?.id, room]);
+
   useEffect(() => { void refreshRenders(); }, [project?.id, floor?.id]);
 
   /* Cloud only: the filmstrip and the stage both draw signed URLs with an hour
@@ -166,16 +190,25 @@ export function RenderModal() {
     [floor, room, rev],
   );
   const off = useMemo(() => new Set(photoOff), [photoOff]);
+  /* What the camera can see, on the view that has one. The list below still shows
+     everything in scope — an object silently missing from it would be
+     inexplicable, which is the same reason `photoSubjects` refuses to filter
+     fitted objects — but only these can take a slot. */
+  const inScope = useMemo(
+    () => (floor ? subjectsInShot(floor, { view, camera }, subjects) : []),
+    [floor, view, camera, subjects],
+  );
+  const seen = useMemo(() => new Set(inScope.map(x => x.objId)), [inScope]);
   const pics = useMemo(
-    () => attachedPhotos(provider, controls, subjects, off),
-    [provider, controls, subjects, off],
+    () => attachedPhotos(provider, controls, inScope, off),
+    [provider, controls, inScope, off],
   );
   const slots = photoSlots(provider, controls);
 
   const settings = useMemo(
     () => ({
       ...settingsOf({
-        view, room, style, furniture, dimensions, roomLabels, imgMeasures,
+        view, camera, room, style, furniture, dimensions, roomLabels, imgMeasures,
         provider, controls, controlScale,
       }),
       /* The ids that will go, in order — the same field the record keeps as its
@@ -183,7 +216,7 @@ export function RenderModal() {
          moves. */
       photos: pics.map(a => a.id),
     }),
-    [view, room, style, furniture, dimensions, roomLabels, imgMeasures,
+    [view, camera, room, style, furniture, dimensions, roomLabels, imgMeasures,
       provider, controls, controlScale, pics],
   );
   const promptKey = project && floor ? promptKeyOf(project.id, floor.id, rev, settings) : '';
@@ -223,14 +256,30 @@ export function RenderModal() {
      geometry for a plan that was never sent. */
   useEffect(() => {
     if (!floor) return;
-    const cv = renderFloorCanvas(floor, referenceOpts({
-      furniture, roomLabels, imgMeasures, room,
-    }));
-    setCanvas(cv);
-    setImg(cv ? cv.toDataURL('image/png') : '');
+    const redraw = () => {
+      const cv = renderFloorCanvas(floor, referenceOpts({
+        view, camera, furniture, roomLabels, imgMeasures, room,
+      }));
+      setCanvas(cv);
+      setImg(cv ? cv.toDataURL('image/png') : '');
+    };
+    /* Every other view redraws now, exactly as it always has: it is a few
+       hundred filled paths, and deferring it by even a tick means there is a
+       moment when the panel is open with no picture in it.
+       The camera is the one case that cannot afford that. Its picture is a
+       z-buffered sweep over the massing at 1800 px plus a PNG encode, about a
+       third of a second, and dragging the cone across the minimap fires a change
+       per pointer event — undeferred, the panel spends the whole drag rendering
+       viewpoints nobody stopped at, and lands on the last one late anyway. */
+    if (view !== 'eye' || !camera) { redraw(); return; }
+    const t = setTimeout(redraw, 90);
+    return () => clearTimeout(t);
     /* `room` is a dependency: a room-scoped brief describes that room, and the
-       picture it is attached to has to be framed on the same thing. */
-  }, [floor, furniture, roomLabels, imgMeasures, room, rev]);
+       picture it is attached to has to be framed on the same thing. `view` and
+       `camera` are, for the stronger version of it: on the eye-level view this is
+       not a drawing of the plan at all, it is what the camera sees, and moving
+       the camera one metre is a different picture. */
+  }, [floor, view, camera, furniture, roomLabels, imgMeasures, room, rev]);
 
   /* Open on the reference image, never on whichever render was selected last
      time. The right pane is what the next Generate is built from — a previous
@@ -265,6 +314,10 @@ export function RenderModal() {
   /* What will actually be sent, and what will not. The second half matters as
      much as the first: a map that was ticked and silently dropped is a choice
      taken away from whoever ticked it. */
+  /* Recomputed under the map on every drag, which is what makes it a readout
+     rather than a warning that arrives once. Both halves of it are a few dozen
+     ray-segment tests over the walls. */
+  const camNote = view === 'eye' && camera ? cameraNote(floor, camera) : null;
   const attached = attachedControls(provider, controls);
   const dropped = controls.filter(k => !attached.includes(k));
   const seedNum = parseSeed(seed);
@@ -361,6 +414,49 @@ export function RenderModal() {
                 ))}
               </div>
             </div>
+            {view === 'eye' && camera && floor && (
+              <div className="cam-block">
+                <div className="row" style={{ alignItems: 'flex-start', marginBottom: 6 }}>
+                  <span className="lbl" style={{ paddingTop: 4 }}>Camera</span>
+                  <div className="fields" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 6 }}>
+                    <CameraMap floor={floor} cam={camera} onChange={c => rs().patch({ camera: c })} />
+                    {camNote && <p className={`hint${camNote.bad ? ' err' : ''}`}>{camNote.text}</p>}
+                  </div>
+                </div>
+                <div className="row">
+                  <span className="lbl">Lens</span>
+                  <div className="fields">
+                    {/* Two dials and no more. Height and field of view are what
+                        change the picture; a pitch control invites a camera
+                        pointed at the ceiling, and every other parameter of a
+                        pinhole is either the plan's or the output size's. */}
+                    <div className="fld">
+                      <span>EYE</span>
+                      <input
+                        type="number" min={40} max={CEILING_CM - 5} step={5} value={camera.z}
+                        onKeyDown={e => e.stopPropagation()}
+                        onChange={e => rs().patch({ camera: normaliseCam({ ...camera, z: Number(e.target.value) }) })}
+                      />
+                      <u>cm</u>
+                    </div>
+                    <div className="fld">
+                      <span>FOV</span>
+                      <input
+                        type="number" min={20} max={130} step={5} value={camera.fov}
+                        onKeyDown={e => e.stopPropagation()}
+                        onChange={e => rs().patch({ camera: normaliseCam({ ...camera, fov: Number(e.target.value) }) })}
+                      />
+                      <u>°</u>
+                    </div>
+                    <button
+                      type="button" className="chip" id="aiCamReset"
+                      title="Put the camera back where the panel would have placed it: standing back in the room, looking at its window."
+                      onClick={() => rs().patch({ camera: autoCam(floor, room) })}
+                    >Reset</button>
+                  </div>
+                </div>
+              </div>
+            )}
             <div className="row" style={{ marginBottom: 10 }}>
               <span className="lbl">Room</span>
               <div className="fields"><div className="fld wide">
@@ -515,6 +611,7 @@ export function RenderModal() {
                 {subjects.map(sub => (
                   <PhotoPick
                     key={sub.objId} subject={sub} slots={slots}
+                    inShot={seen.has(sub.objId)}
                     sent={pics.filter(a => a.objId === sub.objId)}
                     on={!off.has(sub.objId)}
                     onToggle={() => rs().patch({
@@ -528,7 +625,16 @@ export function RenderModal() {
                   {slots === 0
                     ? <>{meta.label} has one image input and the plan is in it, so no photograph can
                       {' '}be sent. Switch to FLUX.2 to use them.</>
-                    : pics.length < subjects.reduce((n, x) => n + x.photos.length, 0)
+                    /* Said before the slot arithmetic, because it is the reason a row is
+                       out and "no slot left" would be the wrong explanation for it. */
+                    : inScope.length < subjects.length
+                      ? <>{subjects.length - inScope.length} of these {subjects.length} objects
+                        {' '}{subjects.length - inScope.length === 1 ? 'is' : 'are'} not in the
+                        {' '}camera&rsquo;s shot, so {subjects.length - inScope.length === 1 ? 'its photograph' : 'their photographs'}
+                        {' '}would ask for something the picture does not contain — and every
+                        {' '}reference image is billed. Move the camera to include
+                        {' '}{subjects.length - inScope.length === 1 ? 'it' : 'them'}.</>
+                    : pics.length < inScope.reduce((n, x) => n + x.photos.length, 0)
                       ? <>Every ticked object sends its first photo before any object sends a second.
                         {' '}What did not fit is untouched — render one room at a time to reach it.</>
                       : <>Each photo goes as its own reference image, named in the brief as the object
@@ -611,11 +717,26 @@ export function RenderModal() {
               {/* This used to read "attach this to the generator", which is the one thing
                   Generate now does for you — but the copy buttons are still the way out to
                   any other generator, so the sentence explains the picture instead. */}
-              The layout every render is held to. <b>Copy image</b> takes it elsewhere.
-              {' '}Nothing on it is written: every object is named in the prompt instead, with
-              {' '}where it sits. Anything we letter onto this picture gets drawn into the render —
-              {' '}numbered discs came back as black roundels on the floor.
-              {imgMeasures && (
+              {/* Two pictures, two explanations. The top-down sentence is about a
+                  drawing and its lettering; on the eye-level view this is not a
+                  drawing of the plan at all, and the thing a person needs told is
+                  what the grey is for — every one of them reads it as a colour
+                  scheme first. */}
+              {view === 'eye' && camera ? (
+                <>
+                  What the camera sees, built from the plan: right geometry, no materials.
+                  {' '}The render replaces the grey — it does not copy it. <b>Copy image</b>
+                  {' '}takes it elsewhere.
+                </>
+              ) : (
+                <>
+                  The layout every render is held to. <b>Copy image</b> takes it elsewhere.
+                  {' '}Nothing on it is written: every object is named in the prompt instead, with
+                  {' '}where it sits. Anything we letter onto this picture gets drawn into the render —
+                  {' '}numbered discs came back as black roundels on the floor.
+                </>
+              )}
+              {imgMeasures && view !== 'eye' && (
                 <>
                   <br />Lettering on the reference can bleed into the render — turn
                   {' '}<b>Measurements on the image</b> off for the cleanest result.
@@ -717,8 +838,9 @@ export { planFacts };
  *  understood without it, but the brief says "image 3 is the sofa" — and if the
  *  person cannot see which picture image 3 is, they have no way to tell a wrong
  *  render from a wrongly numbered one. */
-function PhotoPick({ subject, slots, sent, on, onToggle }: {
-  subject: PhotoSubject; slots: number; sent: AttachedPhoto[]; on: boolean; onToggle: () => void;
+function PhotoPick({ subject, slots, inShot, sent, on, onToggle }: {
+  subject: PhotoSubject; slots: number; inShot: boolean;
+  sent: AttachedPhoto[]; on: boolean; onToggle: () => void;
 }) {
   const project = useEditor(s => s.project);
   const { url, missing } = usePhotoState(project?.id ?? '', subject.photos[0]?.id ?? '');
@@ -728,10 +850,19 @@ function PhotoPick({ subject, slots, sent, on, onToggle }: {
      Generate refused: the reference is in the document but the bytes are not on
      this device, because they were attached elsewhere or never finished
      uploading. */
-  const state = missing ? 'gone' : !on ? 'off' : sent.length ? 'on' : 'full';
+  /* `unseen` is read first, ahead even of missing bytes. An object the camera
+     cannot see is not going whatever else is true of it, so that is the reason
+     to give — telling somebody their photograph is "not on this device" sends
+     them to re-attach one that still would not be sent. Ahead of the tick for
+     the same reason: it is a fact about the picture, not a choice, and "not
+     chosen" would be a different and wrong explanation. */
+  const state = !inShot ? 'unseen' : missing ? 'gone' : !on ? 'off' : sent.length ? 'on' : 'full';
   return (
     <label className={`ai-photo ${state}`} data-obj={subject.objId}>
-      <input type="checkbox" checked={on && !missing} disabled={slots === 0 || missing} onChange={onToggle} />
+      <input
+        type="checkbox" checked={on && !missing && inShot}
+        disabled={slots === 0 || missing || !inShot} onChange={onToggle}
+      />
       <span className="ai-photo-shot">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         {url ? <img src={url} alt="" /> : <i />}
@@ -743,7 +874,9 @@ function PhotoPick({ subject, slots, sent, on, onToggle }: {
       <span className="ai-photo-n">
         {state === 'gone'
           ? 'not on this device'
-          : state === 'on'
+          : state === 'unseen'
+            ? 'not in shot'
+            : state === 'on'
             ? sent.map(a => `image ${a.n}`).join(', ')
             : state === 'full'
               ? 'no slot left'
