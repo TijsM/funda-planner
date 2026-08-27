@@ -22,3 +22,8 @@ eval/runs/
 .env
 # local env — next dev reads .env.local, and it holds the Supabase keys
 .env*.local
+
+# vercel project link — machine-local, not shareable
+.vercel
+# claude code worktrees + local agent state
+.claude/
