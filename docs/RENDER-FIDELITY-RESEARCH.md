@@ -172,6 +172,28 @@ Compute is not the cost — a 15–30 s Cycles render is $0.005–0.009 on a Mod
 
 **The question worth asking at the end of this route:** once the orthographic massing render is correct by construction, render one plan both ways and see what the diffusion pass is still doing. For the top-down view the answer may be "materials, shadows and grain" — a much cheaper problem than the one we started with.
 
+> **Half of this shipped, 2026-08-27, and the estimate above was wrong in a useful way.**
+>
+> The perspective half — an eye-level camera you place on the plan, and the same five conditioning
+> maps rendered from it — is in `src/engine/{camera,scene,pov}.ts`, and it took a day rather than
+> weeks. Two assumptions in the paragraph above are what made it look expensive:
+>
+> - **"geometry for 120 catalogue entries that today are 2D glyph functions with no meshes."**
+>   They do not need meshes. A box the height of the entry's `Z` carries position, size, occlusion
+>   and silhouette, which is the whole of what a control encoder reads; the glyph's detail is
+>   texture, and texture is the half the diffusion model is for. The `Z` table added for the
+>   top-down depth pass turned out to be the entire third dimension this needed.
+> - **"a Python/Blender service inside a Node stack."** Not needed either. There is no lighting to
+>   solve and no material model — the output is a depth buffer, a segmentation buffer and a flat-lit
+>   massing render. That is a z-buffered triangle rasteriser, about 150 lines, and it runs in the
+>   browser and under `@napi-rs/canvas` on the same code path as everything else in `src/engine`.
+>   A 1800 × 1200 sweep over a real Dutch ground floor is 82 ms.
+>
+> Cycles-quality shading and the orthographic/isometric half are still unbuilt, and the open
+> question at the top of this box — what the diffusion pass is still doing once the massing is
+> correct — is still open, because the eval harness (§3) sweeps `eye` against the *top-down*
+> drawing and has not been repointed at the new one. That is the next measurement, not a detail.
+
 ### Option 9 — Train a LoRA on our own (plan, render) pairs (rank 9; start collecting data now)
 
 This is the only option that teaches a model *our* drawing convention — what a 1.2 m wall cut, a door-swing arc, and a 4-seat table glyph actually mean — rather than hoping a generic edge conditioner infers it. And it is the direct kill for invented title blocks and dimension captions: they never appear in the training targets.

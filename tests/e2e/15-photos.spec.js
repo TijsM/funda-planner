@@ -184,6 +184,93 @@ test.describe('the render panel', () => {
     expect(prompt).toMatch(/^.* \| three-seat sofa \|.*image 2/m);
   });
 
+  /** The eye-level view is the one where "which objects are in the picture" has
+   *  an answer narrower than "all of them", and getting it wrong costs twice:
+   *  the model is documented to reproduce every reference image it is handed, so
+   *  a photograph of something behind the lens comes back as a second copy of
+   *  that thing — and BFL meters input megapixels, so it is paid for as well.
+   *
+   *  Two sofas at opposite ends of a long room, a camera pointed at one of them. */
+  test('sends only the photographs of objects the camera can see', async ({ page }) => {
+    await starter(page);
+    await addFromTray(page, 'sofa3', 300, 240);
+    await addFromTray(page, 'sofa3', 380, 300);
+    /* Moved into place by world coordinate rather than dropped there: the tray
+       takes screen pixels, and where those land inside the building depends on
+       the pan and zoom the starter happens to open at. Both ends of the room,
+       on its centre line, is the arrangement this test needs. */
+    const { near, far } = await page.evaluate(() => {
+      const s = window.__ed(), f = s.floor();
+      const xs = f.walls.flatMap(w => [w.a.x, w.b.x]);
+      const ys = f.walls.flatMap(w => [w.a.y, w.b.y]);
+      const x = Math.round((Math.min(...xs) + Math.max(...xs)) / 2);
+      const y0 = Math.min(...ys), y1 = Math.max(...ys);
+      const [a, b] = f.items;
+      a.x = x; a.y = Math.round(y0 + (y1 - y0) * 0.22);
+      b.x = x; b.y = Math.round(y0 + (y1 - y0) * 0.78);
+      s.touch();
+      return { near: { x: a.x, y: a.y }, far: { x: b.x, y: b.y } };
+    });
+
+    for (const it of [near, far]) {
+      await clickObject(page, it.x, it.y);
+      await expect(page.locator('#ctx')).toHaveClass(/show/);
+      await attach(page);
+    }
+
+    await openPanel(page);
+    await expect(page.locator('#aiPhotos .ai-photo')).toHaveCount(2);
+    /* both are in a top-down picture, so both go */
+    await expect(page.locator('#aiPhotos')).toContainText('2 of 7 slots used');
+
+    await page.locator('#aiView button[data-v="eye"]').click();
+    await expect(page.locator('#aiCamMap')).toBeVisible();
+
+    /* Stand on the line between the two sofas, 250 cm from the near one, looking
+       back at it — which puts the far one directly behind the lens and keeps the
+       camera inside the walls whatever coordinates the tray dropped them at.
+       Set through the store rather than by dragging the minimap: this test is
+       about which photographs go, and the drag has its own coverage. */
+    const aim = await page.evaluate(({ a, b }) => {
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const L = Math.hypot(dx, dy) || 1;
+      const x = Math.round(a.x + (dx / L) * 250), y = Math.round(a.y + (dy / L) * 250);
+      const yaw = Math.round((Math.atan2(a.y - y, a.x - x) * 180) / Math.PI);
+      window.__renders().patch({
+        camera: { ...window.__renders().camera, x, y, yaw, pitch: 0 },
+      });
+      return { x, y, yaw };
+    }, { a: near, b: far });
+    await page.waitForTimeout(400);
+    /* the shot has to be a shot of the room, or "not in shot" would be true of
+       everything and this test would pass for the wrong reason */
+    await expect(page.locator('.cam-block .hint')).not.toHaveClass(/err/);
+
+    /* Still listed — an object silently missing from the list would be
+       inexplicable — but marked, disabled, and not taking a slot. */
+    await expect(page.locator('#aiPhotos .ai-photo')).toHaveCount(2);
+    const unseen = page.locator('#aiPhotos .ai-photo.unseen');
+    await expect(unseen).toHaveCount(1);
+    await expect(unseen).toContainText('not in shot');
+    await expect(unseen.locator('input')).toBeDisabled();
+    await expect(page.locator('#aiPhotos')).toContainText('1 of 7 slots used');
+    await expect(page.locator('#aiPhotoNote')).toContainText('not in the camera');
+
+    /* and the brief carries one photograph, not two */
+    const prompt = await page.locator('#aiPrompt').inputValue();
+    expect(prompt).toMatch(/Image 2 photographs an object already on the plan/);
+    expect(prompt).not.toMatch(/Image 3:/);
+
+    /* Turn round and the other one is the one in shot — the narrowing follows
+       the camera rather than being decided once when the panel opened. */
+    await page.evaluate(yaw => {
+      window.__renders().patch({ camera: { ...window.__renders().camera, yaw } });
+    }, (aim.yaw + 180) % 360);
+    await page.waitForTimeout(400);
+    await expect(page.locator('#aiPhotos .ai-photo.unseen')).toHaveCount(1);
+    await expect(page.locator('#aiPhotos')).toContainText('1 of 7 slots used');
+  });
+
   test('unticking an object takes it out of the brief', async ({ page }) => {
     await withSofa(page);
     await attach(page);

@@ -1,4 +1,4 @@
-import type { Opening, Pt, Wall } from './types';
+import type { Item, Opening, Pt, Wall } from './types';
 import { clamp, unitNormal } from './geometry';
 
 export const INK = '#1E1B16';
@@ -24,6 +24,42 @@ export function wallQuad(w: Wall): Pt[] {
     { x: w.b.x - n.x * h, y: w.b.y - n.y * h },
     { x: w.a.x - n.x * h, y: w.a.y - n.y * h },
   ];
+}
+
+/** Where an opening starts and stops along its wall, in centimetres from `a`,
+ *  with the wall's own unit vectors alongside. Null when it has been squeezed to
+ *  nothing — a 0-width doorway is not a doorway.
+ *
+ *  One answer to "where is this door", shared by the plan, the control maps and
+ *  the eye-level massing. They used to hold three copies of this clamp, and a
+ *  door that lands 4 cm apart on two of them is a mullion the render will build.
+ */
+export interface OpeningSpan {
+  n: ReturnType<typeof unitNormal>;
+  /** distance along the wall from `a` */
+  t0: number; t1: number;
+  width: number;
+}
+
+export function openingSpan(w: Wall, op: Opening): OpeningSpan | null {
+  const n = unitNormal(w.a, w.b);
+  const c = clamp(op.at, 0, 1) * n.L, half = Math.min(op.width, n.L) / 2;
+  const t0 = clamp(c - half, 0, n.L), t1 = clamp(c + half, 0, n.L);
+  if (t1 - t0 < 0.5) return null;
+  return { n, t0, t1, width: t1 - t0 };
+}
+
+/** An object's footprint, rotated. Deliberately the box and not the glyph: a
+ *  glyph's interior is hatch and detail, which a control encoder reads as
+ *  texture and repeats as texture — and which an eye-level massing render would
+ *  have to invent a mesh for. */
+export function itemQuad(i: Item): Pt[] {
+  const r = ((i.rot || 0) * Math.PI) / 180, c = Math.cos(r), s = Math.sin(r);
+  const hw = i.w / 2, hh = i.h / 2;
+  return ([[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]] as const).map(([x, y]) => ({
+    x: i.x + x * c - y * s,
+    y: i.y + x * s + y * c,
+  }));
 }
 
 /** the footprint of an opening, slightly proud of the wall so it hit-tests well */

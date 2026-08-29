@@ -42,6 +42,10 @@ src/engine/            pure TS — no React, no DOM, no fetch
   geometry.ts          polyArea, pointInPoly, snapping, hit-testing
   catalog.ts           the 120 objects + their draw functions
   render.ts            paint(ctx, view, opts)   ← browser AND server
+  passes.ts            the top-down conditioning maps: line, depth, seg, change
+  camera.ts            a virtual camera in the plan, and the pinhole maths
+  scene.ts             the plan extruded to grey massing — walls, boxes, openings
+  pov.ts               a z-buffered sweep over that massing → the same five maps
   prompt.ts            buildPrompt(), planFacts()
   io/funda.ts          parseFundaSource(), fmlToProject()
   io/serialize.ts      import/export, versioned migrations

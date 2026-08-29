@@ -2,6 +2,8 @@ import type { Area, BBox, Floor, Item, Pt } from './types';
 import { bboxOf, bearing, compass, polyArea, polyCentroid, pointInPoly, unitNormal } from './geometry';
 import { BRIEF_NAME, CAT_BY_KIND, SEATS } from './catalog';
 import { descOf, hasPhotos, labelOf, photosOf, shellBBox } from './model';
+import { camRoom, shotAddress, type Cam } from './camera';
+import { idsInShot } from './pov';
 
 export type ViewKind = 'top' | 'eye' | 'iso' | 'sketch';
 
@@ -33,6 +35,14 @@ export interface PromptOpts {
    *  and what comes back is that room. Omit this and the brief is byte-identical
    *  to what it was before photos existed. */
   photos?: PhotoBrief[];
+  /** Where the camera stood, on the eye-level view.
+   *
+   *  Present, image 1 stops being a floor plan and becomes a grey massing render
+   *  taken from this exact point — so the brief has to stop describing a drawing
+   *  seen from above and start describing a photograph to be taken from where
+   *  the model is already standing. That is a different set of sentences, not a
+   *  different adjective, which is why this is a field and not a flag. */
+  camera?: Cam | null;
 }
 
 /** One photograph, as the brief refers to it. */
@@ -70,6 +80,16 @@ export interface PlanFacts {
   notes: string[];
 }
 
+/** Does this object say anything the brief can use? An object imported from the
+ *  listing with no name, no description and no photograph is a rectangle with no
+ *  meaning — dozens of them would flood the OBJECTS table, so they are counted
+ *  as `anonFitted` and described once instead.
+ *
+ *  Module scope rather than a closure inside `planFacts`, because `buildPrompt`
+ *  has to recount them for the camera's shot and two spellings of "anonymous"
+ *  would disagree the day one of them gained a clause. */
+const speaks = (i: Item) => !i.fromFunda || !!descOf(i) || !!labelOf(i).trim() || hasPhotos(i);
+
 export function planFacts(f: Floor): PlanFacts {
   /* Orient against the building, not the content bounds — a chair dropped
      outside the walls must not rotate every room's compass point. */
@@ -98,8 +118,6 @@ export function planFacts(f: Floor): PlanFacts {
      naming a photograph of an object no row mentioned and no badge numbered,
      which is how a kitchen photo came to be described as "object, kitchen" and
      then ignored. */
-  const speaks = (i: Item) => !i.fromFunda || !!descOf(i) || !!labelOf(i).trim() || hasPhotos(i);
-
   const used = new Set<string>();
   rooms.forEach(r => {
     r.items = f.items.filter(i => {
@@ -372,6 +390,21 @@ const CONTROL_LINES: Record<ControlKind, string> = {
   change: 'a change mask: white may be re-rendered, black must come through unchanged',
 };
 
+/** The two whose sentence stops being true from inside the room.
+ *
+ *  Depth is the one that matters and it is not a nuance: from above, brighter is
+ *  higher off the floor; from a camera standing in the room, brighter is nearer
+ *  the lens. Those are different pictures and the wrong caption is worse than no
+ *  caption at all — the note on `MAX_REFERENCE_MAPS` in `state/renders.ts` says
+ *  what an unannounced ramp comes back as, and a misannounced one is that plus
+ *  an instruction to build the room inside out. `line` is the same drawing
+ *  either way; only the word "plan" is wrong, and a brief that calls a
+ *  photograph a plan is inviting the dollhouse back. */
+const CONTROL_LINES_POV: Partial<Record<ControlKind, string>> = {
+  line: 'a line drawing of this same view: every wall, opening and object edge',
+  depth: 'a depth map of this same view: brighter is nearer the camera, not a colour',
+};
+
 /** The words before the LOCKED tables — the ones BFL's guide says are read with
  *  the most attention, and the budget the tests hold us to: 78 words for a plain
  *  top-down brief, against 157 before. The tables below are data and are allowed
@@ -436,22 +469,52 @@ const STAIRS = /stair|trap\b/i;
 export function buildPrompt(f: Floor, opts: PromptOpts): string {
   const F = planFacts(f);
   const V = AI_VIEWS[opts.view] ?? AI_VIEWS.top;
+  /* The camera, on the one view that has one. Everything below reads
+     `povCam` rather than `opts.camera` so that an eye-level brief with no camera
+     placed keeps producing exactly the words it produced before this existed —
+     which is also the picture it gets, since `referenceOpts` falls back to the
+     plan drawing in the same case. */
+  const povCam = opts.view === 'eye' && opts.camera ? opts.camera : null;
+  const standing = povCam ? camRoom(f, povCam) : null;
+
   const only = opts.room && opts.room !== '*' ? F.rooms.find(r => r.a.id === opts.room) : undefined;
-  const rooms = only ? [only] : F.rooms;
+
+  /* Everything the camera can see, or null when there is no camera.
+   *
+   *  This is the difference between a brief for a floor plan and a brief for a
+   *  photograph, and it is not a refinement — it is the whole of what "adjust
+   *  the prompt to the camera" means. The tables below are read as the authority
+   *  on what is in the room: the LOCKED heading says "do not invent or omit",
+   *  and OBJECTS says "each one is already drawn on the plan; keep it exactly
+   *  where it is". Handed the whole floor's furniture, a model pointed at a
+   *  kitchen dutifully renders the dining table, the fireplace and the staircase
+   *  from three rooms away as well — measured, on the first eye-level render
+   *  that came back. It was obeying us.
+   *
+   *  So with a camera, the tables describe the shot. Objects out of frame or
+   *  behind a wall are not mentioned; rooms the camera cannot see are not
+   *  mentioned; and the compass, which is a fact about a drawing seen from
+   *  above, gives way to where things sit in the picture. */
+  const shot = povCam ? idsInShot(f, povCam) : null;
+  const rooms = (only ? [only] : F.rooms).filter(r => !shot || shot.has(r.a.id));
   /* Every object the brief will list. Computed here rather than inside the
      OBJECTS block because the photograph sentences up in REFERENCE have to
      address the same objects the table does, and in the same words: a photograph
      that names something the table never mentions is worse than one that names
      nothing. */
-  const listed = briefObjects(f, opts, F);
+  const listed = briefObjects(f, opts, F).filter(o => !shot || shot.has(o.item.id));
   /* How to point at one drawn block using nothing but words. This is the whole
      replacement for the annotation that used to be printed on the picture, and
      it is worth being clear about why words won. A caption is unreadable to the
      model at plan scale; a disc big enough to read gets painted into the render
      as a black roundel. There is no third option on the image. In the text there
      is no bleed at all — the worst a wrong phrase can do is describe the wrong
-     sofa, and the drawing still says where the sofa is. */
-  const addressOf = new Map(listed.map(o => [o.item.id, objectAddress(o, F)]));
+     sofa, and the drawing still says where the sofa is.
+     From a camera the address is the camera's: see `shotAddress`. */
+  const addressOf = new Map(listed.map(o => [
+    o.item.id,
+    povCam ? shotAddress(povCam, { x: o.item.x, y: o.item.y }) : objectAddress(o, F),
+  ]));
   const dim = opts.dimensions;
   /* Image 1 is the plan, always. Everything else counts up from 2 — declared
      once here so the photograph lines, the map lines and the OBJECTS column
@@ -465,7 +528,16 @@ export function buildPrompt(f: Floor, opts: PromptOpts): string {
      so what must not be reinterpreted is now what is read first. */
   L.push(V.lead, '');
   L.push('CAMERA AND OUTPUT');
-  L.push(V.cam.replace('{ROOM}', rooms[0]?.name || 'main room'));
+  /* A placed camera replaces the view's own sentence rather than decorating it.
+     "Looking towards the windows" is a guess about the shot; image 1 IS the shot,
+     taken from the point the person chose, and the only thing left to say is that
+     the lens does not move. Saying both would give the model two cameras and let
+     it pick — and the words are the half it is documented to weigh more highly
+     late in a brief, which is the wrong half here. */
+  L.push(povCam
+    ? `Shot from exactly where image 1 was shot${standing ? `, in the ${standing.name.toLowerCase()}` : ''}.`
+      + ' Same viewpoint, same direction, same lens.'
+    : V.cam.replace('{ROOM}', rooms[0]?.name || 'main room'));
   L.push(V.out, '');
 
   L.push('REFERENCE');
@@ -477,7 +549,26 @@ export function buildPrompt(f: Floor, opts: PromptOpts): string {
      it exactly", which says the same thing in words nobody published. */
   const maps = (opts.controls ?? []).filter(k => k in CONTROL_LINES);
   const photos = opts.photos ?? [];
-  if (maps.length || photos.length) {
+  /* What image 1 is has to be said outright once the camera is placed, because
+     it is no longer a floor plan. It is a grey model of this room seen from the
+     lens — right geometry, no materials — and a model told only to "keep the
+     spatial arrangement" of it reproduces the grey as a colour scheme. Naming
+     what the greys are FOR is the whole instruction: geometry from the picture,
+     everything else from the words below.
+
+     Twenty-six words, and both halves of what it does not say are deliberate.
+     It does not enumerate "every wall, window, doorway and object in the same
+     place and size", because that is prose restating what the pixels already
+     carry, through the channel arXiv:2507.08039 measures at 0.41 quadrant F1 —
+     the same argument that took `placeOf` out of the OBJECTS table. And the
+     camera line above no longer ends "do not move, tilt or widen the camera",
+     because BFL's own guide says to describe what you want rather than what you
+     do not; two positive sentences beat two positive sentences and a negative
+     one, and the pair came to 116 words against the 80 the window allows. */
+  if (povCam) {
+    L.push('Image 1 is a grey untextured 3D model of this room, from that camera.'
+      + ' Copy its geometry exactly and give every grey surface a real material.');
+  } else if (maps.length || photos.length) {
     L.push('Keep the exact spatial arrangement from image 1 — same composition, same positioning of elements.');
   }
   /* The walls rule is on every branch. It used to be a closing line that ran
@@ -486,13 +577,18 @@ export function buildPrompt(f: Floor, opts: PromptOpts): string {
      has just been told not to draw. "Exactly as drawn" was carrying it
      implicitly, and implicit is what the camera line taught us not to trust; the
      room sentence is three words shorter to pay for the seven. */
-  L.push(only
-    ? `Render only the ${only.name} from image 1, exactly as drawn.`
-      + ' Do not add, remove or rearrange walls.'
-    : maps.length
-      ? 'Do not add, remove or rearrange walls.'
-      : 'Match image 1 exactly: same shapes, same proportions, same positions.'
-        + ' Do not add, remove or rearrange walls.');
+  L.push(povCam
+    /* The room sentence and the match-exactly sentence are both already above,
+       said better and about the right kind of picture. What is left is the rule
+       every branch carries. */
+    ? 'Do not add, remove or rearrange walls.'
+    : only
+      ? `Render only the ${only.name} from image 1, exactly as drawn.`
+        + ' Do not add, remove or rearrange walls.'
+      : maps.length
+        ? 'Do not add, remove or rearrange walls.'
+        : 'Match image 1 exactly: same shapes, same proportions, same positions.'
+          + ' Do not add, remove or rearrange walls.');
   /* Numbered from the array, not deduplicated: the numbers have to match what the
      provider actually attached, so a caller that sends the same kind twice gets
      two lines rather than a brief whose Image 3 is the provider's Image 2.
@@ -546,7 +642,8 @@ export function buildPrompt(f: Floor, opts: PromptOpts): string {
       L.push(`Image ${photoFrom + n}: ${p.label}${where}${at ? `, ${at}` : ''}${note}.`);
     });
   }
-  maps.forEach((k, n) => L.push(`Image ${photoFrom + photos.length + n} is ${CONTROL_LINES[k]}. Do not render it.`));
+  maps.forEach((k, n) => L.push(`Image ${photoFrom + photos.length + n} is`
+    + ` ${(povCam && CONTROL_LINES_POV[k]) || CONTROL_LINES[k]}. Do not render it.`));
   /* Nothing here about lettering any more, and the silence is the point. The
      brief used to carry a sentence asking the model not to draw the captions we
      had printed on the reference — a negative instruction, which is the one
@@ -554,7 +651,11 @@ export function buildPrompt(f: Floor, opts: PromptOpts): string {
      purpose. The picture is clean now, so the only mention of text left in this
      brief is the positive one in CAMERA AND OUTPUT, and a brief that does not
      talk about writing is a brief less likely to produce any. */
-  L.push('North is at the top.', '');
+  /* North is a fact about a drawing seen from above, and there is no such
+     direction in a photograph taken from inside the room. Left in for every other
+     view, where the tables below lean on it — see the note under ROOMS. */
+  if (!povCam) L.push('North is at the top.');
+  L.push('');
 
   /* One heading over everything the drawing already decided, so the model has a
      line to draw between what it may reinterpret and what it may not. The Notes
@@ -570,18 +671,31 @@ export function buildPrompt(f: Floor, opts: PromptOpts): string {
      were wrong as measurements too. An area in m² is a quantity; a width × depth
      is an instruction to draw a dimension. Room sizes stay: they are per-room and
      the person asked for them. */
-  L.push(only
-    ? `The ${only.name}${dim ? ` — ${(only.area / 10000).toFixed(1)} m²` : ''}, on the ${f.name.toLowerCase()}.`
-    : `"${f.name}"${dim && F.mapped
-      ? ` — ${(F.total / 10000).toFixed(1)} m² over ${F.rooms.length} named room${F.rooms.length === 1 ? '' : 's'}`
-      : ''}.`);
+  L.push(povCam
+    /* A floor total is a fact about the plan, and this is one photograph of part
+       of it — quoting 78 m² over five rooms invites the other four into the
+       frame. The second sentence is the counterweight to the LOCKED heading
+       above, which on its own reads as "the floor has exactly these rooms". */
+    ? `${standing ? `The ${standing.name.toLowerCase()}` : 'The space'}, on the ${f.name.toLowerCase()}`
+      + `${dim && standing ? ` — ${(polyArea(standing.poly) / 10000).toFixed(1)} m²` : ''}.`
+      + ' Everything listed below is what this one photograph shows, not the whole floor.'
+    : only
+      ? `The ${only.name}${dim ? ` — ${(only.area / 10000).toFixed(1)} m²` : ''}, on the ${f.name.toLowerCase()}.`
+      : `"${f.name}"${dim && F.mapped
+        ? ` — ${(F.total / 10000).toFixed(1)} m² over ${F.rooms.length} named room${F.rooms.length === 1 ? '' : 's'}`
+        : ''}.`);
   L.push('');
 
   /* Columns, not sentences: the same fifteen facts in a fixed order, with no
      connective prose for the model to weigh differently one row to the next. */
-  L.push(only ? 'THE ROOM' : 'ROOMS');
-  const roomCols = ['Room', ...(dim ? ['Size'] : []), ...(only ? [] : ['Where']), 'Notes'];
-  L.push(roomCols.join(' | '));
+  /* The compass column goes with the camera, for the same reason "North is at the
+     top" did: it is corroborated by nothing a person standing in the room can
+     see, and a room told it is "west" in a photograph with no west in it is a
+     room being given a fact it can only misuse. */
+  const roomWhere = !only && !povCam;
+  if (rooms.length) L.push(only ? 'THE ROOM' : 'ROOMS');
+  const roomCols = ['Room', ...(dim ? ['Size'] : []), ...(roomWhere ? ['Where'] : []), 'Notes'];
+  if (rooms.length) L.push(roomCols.join(' | '));
   rooms.forEach(r => {
     const notes = [descOf(r.a)];
     if (opts.furniture && !r.items.length) {
@@ -608,7 +722,7 @@ export function buildPrompt(f: Floor, opts: PromptOpts): string {
          else, which is the case arXiv:2507.08039 measures at 0.41 F1. If a sweep
          shows rooms landing on the wrong side anyway, this column is the next
          thing to cut, and it is one line. */
-      ...(only ? [] : [cell(r.where.replace(/^on the /, '').replace(/ side$/, ''))]),
+      ...(roomWhere ? [cell(r.where.replace(/^on the /, '').replace(/ side$/, ''))] : []),
       cell(notes.filter(Boolean).join('; ')),
     ].join(' | '));
   });
@@ -675,13 +789,34 @@ export function buildPrompt(f: Floor, opts: PromptOpts): string {
   }
   /* Outside the block above on purpose: a floor can consist of nothing but
      anonymous fitted blocks, and that is precisely when this needs saying. */
-  if (!only && opts.furniture && F.anonFitted) {
-    L.push(`${F.anonFitted} unnamed fitted block${F.anonFitted === 1 ? ' is' : 's are'} drawn on the plan`
+  /* Scoped to the shot with the rest of it: "fifteen unnamed fitted blocks are
+     drawn on the plan" is an instruction to find room for fifteen of them, and
+     from a camera in the hall none of them is in the picture at all. */
+  const anonFitted = shot
+    ? f.items.filter(i => i.fromFunda && !speaks(i) && shot.has(i.id)).length
+    : F.anonFitted;
+  if (!only && opts.furniture && anonFitted) {
+    L.push(`${anonFitted} unnamed fitted block${anonFitted === 1 ? ' is' : 's are'}`
+      + `${shot ? ' in this shot' : ' drawn on the plan'}`
       + ' — kitchen units, sanitary ware, built-in joinery. Render them as built-in cabinetry'
       + ' against the wall they touch, never open floor, a passage or a corridor.', '');
   }
 
-  if (!only) {
+  if (povCam) {
+    /* Compass elevations are unusable from inside the room and the floor's total
+       doorway count is about rooms this shot does not contain. What is left is
+       the fact that matters to a photograph — how much daylight, and from where
+       in the frame — plus the rule the block existed for. */
+    L.push('OPENINGS AND LIGHT');
+    const glazed = f.walls.flatMap(w => w.openings)
+      .filter(op => op.type === 'window' && shot!.has(op.id));
+    L.push(glazed.length
+      ? `${glazed.length === 1 ? 'One window is' : `${glazed.length} windows are`} in shot`
+        + ` — the daylight comes from ${glazed.length === 1 ? 'it' : 'them'}.`
+      : 'No window is in shot — the daylight comes from off camera. Light the space'
+        + ' softly and evenly, with no visible window.');
+    L.push('Do not add windows or doors that are not in the picture.', '');
+  } else if (!only) {
     L.push('OPENINGS AND LIGHT');
     if (F.windowSides.length >= 5) {
       /* A list of six or seven compass points is the same as saying nothing —

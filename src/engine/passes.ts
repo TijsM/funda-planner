@@ -2,9 +2,9 @@ import type { Area, Floor, Item, Opening, Pt, Wall } from './types';
 import type { Frame } from './frame';
 import { CAT_BY_KIND } from './catalog';
 import { heightOfItem } from './custom';
-import { clamp, unitNormal } from './geometry';
+import { clamp } from './geometry';
 import { paint } from './render';
-import { pathPoly, wallQuad } from './shapes';
+import { itemQuad, openingSpan, pathPoly, wallQuad } from './shapes';
 
 type Ctx = CanvasRenderingContext2D;
 
@@ -54,11 +54,18 @@ const FLOOR_DEPTH = 0.16;
  *  wants: 0 is frozen, 1 is free. Walls and openings are the survey and must
  *  not move at all; fitted joinery is where it is because a kitchen fits the
  *  room; loose furniture may be restyled; open floor is the model's to fill. */
-const CHANGE = { wall: 0.05, joinery: 0.2, loose: 0.4, floor: 0.9 };
+export const CHANGE = { wall: 0.05, joinery: 0.2, loose: 0.4, floor: 0.9 };
 
 /** Groups that are built in rather than carried in. A kitchen run redrawn
  *  60 cm to the left is a different flat, not a different sofa. */
 const FITTED_GROUPS = new Set(['Kitchen', 'Bathroom', 'Structure']);
+
+/** How free the model is to repaint one object, on the same 0..1 scale. Shared
+ *  with the eye-level change map: whether a kitchen run is joinery is a fact
+ *  about the object, not about which way the camera happens to be pointing. */
+export const itemFreedom = (i: Item): number =>
+  (i.fromFunda || FITTED_GROUPS.has(CAT_BY_KIND[i.kind]?.group || ''))
+    ? CHANGE.joinery : CHANGE.loose;
 
 const grey = (v: number) => `rgb(${v},${v},${v})`;
 const g8 = (unit: number) => Math.round(clamp(unit, 0, 1) * 255);
@@ -75,28 +82,14 @@ const VOID: RGB = [0, 0, 0];
 
 /* ── geometry the passes share ──────────────────────────────────── */
 
-/** An object's footprint, rotated. Deliberately the box and not the glyph: a
- *  glyph's interior is hatch and detail, which a control encoder reads as
- *  texture and repeats as texture. */
-function itemQuad(i: Item): Pt[] {
-  const r = ((i.rot || 0) * Math.PI) / 180, c = Math.cos(r), s = Math.sin(r);
-  const hw = i.w / 2, hh = i.h / 2;
-  return ([[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]] as const).map(([x, y]) => ({
-    x: i.x + x * c - y * s,
-    y: i.y + x * s + y * c,
-  }));
-}
-
-/** The two jambs of an opening, or null when it has collapsed to nothing. The
- *  same clamping `render.ts` does, so a gap lands in the same place on the
- *  control map as it does on the drawing beside it. */
+/** The two jambs of an opening as points, or null when it has collapsed to
+ *  nothing. `openingSpan` does the clamping, so a gap lands in the same place on
+ *  the control map, on the drawing beside it and in the eye-level massing. */
 function jambs(w: Wall, op: Opening) {
-  const n = unitNormal(w.a, w.b);
-  const c = clamp(op.at, 0, 1) * n.L, half = Math.min(op.width, n.L) / 2;
-  const t0 = clamp(c - half, 0, n.L), t1 = clamp(c + half, 0, n.L);
-  if (t1 - t0 < 0.5) return null;
-  const P = (t: number): Pt => ({ x: w.a.x + n.ux * t, y: w.a.y + n.uy * t });
-  return { n, p0: P(t0), p1: P(t1), width: t1 - t0 };
+  const s = openingSpan(w, op);
+  if (!s) return null;
+  const P = (t: number): Pt => ({ x: w.a.x + s.n.ux * t, y: w.a.y + s.n.uy * t });
+  return { n: s.n, p0: P(s.t0), p1: P(s.t1), width: s.width };
 }
 
 /** The slab of wall an opening replaces. A hair proud of the wall face so it
@@ -465,9 +458,7 @@ function seg(g: Ctx, f: Floor, frame: Frame, items: Item[]) {
  *  wall's value — a doorway that may drift 20 cm is a doorway that will. */
 function change(g: Ctx, f: Floor, frame: Frame, items: Item[]) {
   ground(g, frame, grey(g8(CHANGE.floor)));
-  const freedom = (i: Item) =>
-    (i.fromFunda || FITTED_GROUPS.has(CAT_BY_KIND[i.kind]?.group || ''))
-      ? CHANGE.joinery : CHANGE.loose;
+  const freedom = itemFreedom;
   /* Freest first, so where two footprints overlap the more frozen value wins —
      the same rule the walls already follow by being painted last. In document
      order a rug dropped over a kitchen run unfroze the run (measured: 102, the

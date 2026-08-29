@@ -15,6 +15,7 @@ import {
 } from '@data/providers';
 import { fmlToProject } from '@engine/index';
 import { PASS_KINDS } from '@engine/passes';
+import { autoCam } from '@engine/camera';
 import type { Fml } from '@engine/io/funda';
 import { statusUrl } from '@shell/jobs';
 import { poll, type PollResult } from '../../src/server/providers/bfl';
@@ -671,7 +672,13 @@ describe('the conditioning images', () => {
 
   /* `room` is in here because the numbering on the picture is scoped the way the
      brief is: a room-scoped render numbers that room's objects and no others. */
-  const REF = { furniture: true, roomLabels: false, imgMeasures: false, imgLabels: true, room: '*' };
+  const REF = {
+    /* Named rather than left to a default: `view` is what chooses between the
+       plan renderer and the eye-level one, and every assertion below is about
+       the plan. */
+    view: 'top' as const,
+    furniture: true, roomLabels: false, imgMeasures: false, imgLabels: true, room: '*',
+  };
 
   it('frames every control map exactly like the reference beside it', () => {
     const opts = files.referenceOpts(REF);
@@ -713,6 +720,56 @@ describe('the conditioning images', () => {
     /* Same bytes would mean `pass` was ignored and we had just paid to send the
        reference image twice. */
     expect(files.pngBase64(seg!)).not.toBe(files.pngBase64(ink!));
+  });
+
+  /** The other half of `referenceOpts`' job, and the one that is new: it also
+   *  chooses WHICH renderer draws the picture. A camera on the eye-level view
+   *  sends every image through `pov.ts` instead of `passes.ts`, and the same
+   *  invariant has to survive the switch — a control map a few pixels off the
+   *  reference is geometry for a plan that was never sent. */
+  describe('with an eye-level camera', () => {
+    const cam = autoCam(GROUND)!;
+    const EYE = { ...REF, view: 'eye' as const, camera: cam };
+
+    it('draws what the camera sees instead of the plan', () => {
+      const plan = files.renderFloorCanvas(GROUND, files.referenceOpts(REF))!;
+      const eye = files.renderFloorCanvas(GROUND, files.referenceOpts(EYE))!;
+      expect(files.pngBase64(eye)).not.toBe(files.pngBase64(plan));
+      /* a photograph's frame, not a plan's: 3:2 landscape whatever shape the
+         building happens to be */
+      expect(eye.width / eye.height).toBeCloseTo(1.5, 2);
+      expect(Math.max(eye.width, eye.height)).toBe(files.REFERENCE_MAX_PX);
+    });
+
+    it('frames every control map exactly like the picture it conditions', () => {
+      const opts = files.referenceOpts(EYE);
+      const ref = files.renderFloorCanvas(GROUND, opts)!;
+      const maps = files.renderControlCanvases(GROUND, ['line', 'depth', 'seg'], opts);
+      expect(maps.map(m => m.kind)).toEqual(['line', 'depth', 'seg']);
+      for (const m of maps) {
+        expect([m.canvas.width, m.canvas.height], m.kind).toEqual([ref.width, ref.height]);
+        expect(files.pngBase64(m.canvas), m.kind).not.toBe(files.pngBase64(ref));
+      }
+    });
+
+    /** The camera belongs to the eye-level view and to nothing else. A stored
+     *  one riding along on a top-down render would silently replace the plan
+     *  drawing with a photograph of one room. */
+    it('is ignored on every other view', () => {
+      const plan = files.pngBase64(files.renderFloorCanvas(GROUND, files.referenceOpts(REF))!);
+      for (const view of ['top', 'iso', 'sketch'] as const) {
+        const out = files.renderFloorCanvas(GROUND, files.referenceOpts({ ...REF, view, camera: cam }))!;
+        expect(files.pngBase64(out), view).toBe(plan);
+      }
+    });
+
+    /** A floor with nothing drawn on it has no reference image from any camera.
+     *  Standing one in the middle of it would produce a white rectangle, and the
+     *  first anyone would hear of it is a credit spent. */
+    it('still refuses a floor with nothing on it', () => {
+      const empty = { ...GROUND, walls: [], areas: [], items: [], notes: [], dims: [], lines: [] };
+      expect(files.renderFloorCanvas(empty, files.referenceOpts(EYE))).toBeNull();
+    });
   });
 
   it('hands the provider raw base64, with no data: container in it', () => {

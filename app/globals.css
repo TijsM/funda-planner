@@ -538,6 +538,11 @@ textarea.src:focus{border-color:var(--vermilion)}
 .ai-photo.off .ai-photo-n{color:var(--tx-3)}
 /* the bytes are on another device — the render cannot send this one, and saying
    so here is the difference between knowing and finding out at Generate */
+/* Out of the camera's shot: dimmer than an unticked row, because this one was
+   not a choice — and the cursor says so rather than leaving a dead checkbox. */
+.ai-photo.unseen{opacity:.38;cursor:default}
+.ai-photo.unseen:hover{background:none}
+.ai-photo.unseen .ai-photo-n{color:var(--tx-3)}
 .ai-photo.gone{opacity:.7}
 .ai-photo.gone .ai-photo-n{color:var(--danger)}
 .ai-photo.gone .ai-photo-shot{border:1px dashed var(--danger)}
@@ -647,6 +652,23 @@ textarea.src:focus{border-color:var(--vermilion)}
 /* stretch, not start: the right column is the taller one now, and the prompt
    grows into the space instead of leaving a hole under it */
 .ai-b{display:grid;grid-template-columns:1fr 380px;gap:20px;align-items:stretch}
+/* ---------- the eye-level camera ---------- */
+.cam-block{
+  border:1px solid var(--line);border-radius:4px;background:var(--sunken);
+  padding:8px 8px 2px;margin-bottom:10px;
+}
+.cam-block .row:last-child{margin-bottom:7px}
+.cam-block .hint{padding:0;font-size:10px}
+.cam-map{
+  display:block;border-radius:3px;border:1px solid var(--line-hi);background:var(--paper);
+  cursor:crosshair;touch-action:none;
+}
+.cam-block .chip{
+  flex:none;height:26px;padding:0 10px;border:1px solid var(--line-hi);border-radius:3px;
+  font:500 10.5px/1 var(--sans);color:var(--tx-2);background:var(--panel);transition:.12s;
+}
+.cam-block .chip:hover{border-color:var(--brass);color:var(--tx)}
+
 .ai-left{min-width:0;display:flex;flex-direction:column}
 .ai-left textarea{flex:1}
 .ai-right{min-width:0;display:flex;flex-direction:column;gap:8px}
