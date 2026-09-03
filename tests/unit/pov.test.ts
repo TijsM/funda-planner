@@ -609,10 +609,11 @@ describe('buildPrompt, with a camera placed', () => {
     const f = room();
     const out = buildPrompt(f, { ...base, camera: autoCam(f)! });
     expect(out).toMatch(/Shot from exactly where image 1 was shot/);
-    expect(out).toMatch(/grey untextured 3D model/);
-    /* and says what the grey is FOR — without this the model reads it as a
-       colour scheme and returns a grey room */
-    expect(out).toMatch(/give every grey surface a real material/i);
+    expect(out).toMatch(/untextured 3D model/);
+    expect(out).toMatch(/flat\s+placeholder colours/);
+    /* and says what the flat colours are FOR — without this the model reads them
+       as a finished palette and returns the placeholder room */
+    expect(out).toMatch(/give every flat surface a real material/i);
     /* the rule that survives on every branch */
     expect(out).toMatch(/Do not add, remove or rearrange walls/);
   });

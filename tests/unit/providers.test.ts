@@ -5,6 +5,7 @@ import {
 } from '@data/providers';
 import { flux2Flex, flux2Max, bflUrl } from '@server/providers/bfl';
 import { MISSING_FAL_KEY, falUrl, fluxGeneralCn, qwenEdit, zImageCn } from '@server/providers/fal';
+import { geminiFlashImage, geminiKeyedUrl, geminiProImage, imageSize, nearestAspect } from '@server/providers/gemini';
 import { gptImageMini, nearestSize, openaiKeyedUrl } from '@server/providers/openai';
 import { PROVIDERS, ProviderError, providerOf } from '@server/providers';
 import { assertAffordable, type GenerateArgs, type Provider } from '@server/providers/types';
@@ -38,6 +39,7 @@ const realFetch = globalThis.fetch;
 const realFlux = process.env.FLUX_API_KEY;
 const realFal = process.env.FAL_KEY;
 const realOpenai = process.env.OPENAI_API_KEY;
+const realGemini = process.env.GEMINI_API_KEY;
 
 /** Every provider's submit answered with a plausible acceptance, so the body it
  *  built is readable without anything leaving the machine. */
@@ -71,6 +73,7 @@ beforeEach(() => {
   process.env.FLUX_API_KEY = 'test-flux-key';
   process.env.FAL_KEY = 'test-fal-key';
   process.env.OPENAI_API_KEY = 'test-openai-key';
+  process.env.GEMINI_API_KEY = 'test-gemini-key';
 });
 
 afterEach(() => {
@@ -78,6 +81,7 @@ afterEach(() => {
   if (realFlux === undefined) delete process.env.FLUX_API_KEY; else process.env.FLUX_API_KEY = realFlux;
   if (realFal === undefined) delete process.env.FAL_KEY; else process.env.FAL_KEY = realFal;
   if (realOpenai === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = realOpenai;
+  if (realGemini === undefined) delete process.env.GEMINI_API_KEY; else process.env.GEMINI_API_KEY = realGemini;
 });
 
 /* ── the spending ceiling ─────────────────────────────────────────── */
@@ -905,6 +909,7 @@ describe('the OpenAI provider', () => {
   });
 
   it('does not read a null megapixel rate as free', async () => {
+    /* see also the Gemini block below — both flat-priced vendors share the shape */
     /* Flat-priced, which is the shape no other provider here uses: the megapixel
        rate is null and `estimateUsd` must answer the flat price rather than zero
        — the bug that would make the one provider with no per-megapixel figure
@@ -916,5 +921,254 @@ describe('the OpenAI provider', () => {
     const job = await gptImageMini.submit(ARGS);
     await settled(gptImageMini, job.pollUrl);
     expect(sent).toHaveLength(1);
+  });
+});
+
+/* ── Gemini: synchronous, menu-sized, the widest photo budget ─────── */
+
+/** Google's Interactions API is synchronous like OpenAI's endpoint, so the same
+ *  held-in-process seam applies and the same `settled` helper reads it out. What
+ *  is distinctly Gemini's: the output is a MENU (aspect ratio + '1K'/'2K'), the
+ *  key rides in `x-goog-api-key`, and a 429 is quota and rate limit in one status
+ *  with only the message to tell them apart. */
+const GEMINI_JPEG = '/9j/4AAQSkZJRg==';
+
+/** A TRANSCRIPT of a real 200 off the live endpoint (2026-09-03), trimmed only
+ *  in the length of its base64 and its opaque thought signature.
+ *
+ *  This fixture is the whole reason the block below is worth anything. Its first
+ *  version was `{ output_image: { data, mime_type } }` — invented from the field
+ *  names the client libraries expose — and the adapter read exactly that, so
+ *  every test here passed green while every real render failed with "Google
+ *  answered the render without any image data in it". A fixture written from the
+ *  same guess as the code under test cannot disagree with it. Keep this one a
+ *  transcript: the picture is a content part of a `model_output` STEP, and a
+ *  `thought` step with no content at all sits in front of it. */
+const geminiOk = (over: Record<string, unknown> = {}) => ({
+  id: 'v1_Chdw4yZas',
+  object: 'interaction',
+  status: 'completed',
+  model: 'gemini-3.1-flash-image',
+  usage: {
+    total_tokens: 1631,
+    total_input_tokens: 272,
+    input_tokens_by_modality: [{ modality: 'text', tokens: 14 }, { modality: 'image', tokens: 258 }],
+    total_output_tokens: 1359,
+    output_tokens_by_modality: [{ modality: 'image', tokens: 1120 }],
+    total_thought_tokens: 0,
+  },
+  steps: [
+    { type: 'thought', signature: 'EuKEVgrehFYBEU0yD9EL' },
+    { type: 'model_output', content: [{ type: 'image', mime_type: 'image/jpeg', data: GEMINI_JPEG }] },
+  ],
+  ...over,
+});
+const GEMINI_OK = geminiOk();
+
+describe('the Gemini provider', () => {
+  it('maps the asked-for canvas onto the aspect and size menu', () => {
+    /* The endpoint takes no width or height — only a ratio off a fixed list and
+       a size class — so this mapping is the whole of the sizing logic. Compared
+       in log space, like `nearestSize`, so 3:2 and 2:3 each land on their own
+       orientation. */
+    expect(nearestAspect(960, 960)).toBe('1:1');
+    expect(nearestAspect(1800, 1200)).toBe('3:2');
+    expect(nearestAspect(1200, 1800)).toBe('2:3');
+    expect(nearestAspect(2100, 900)).toBe('21:9');
+    /* 2K costs half as much again on the flash model, so it is asked for only
+       when the request actually wants more than 1K can carry. Never 4K: $0.24 at
+       the pro rate, over every ceiling this app has. */
+    expect(imageSize(960, 960)).toBe('1K');
+    expect(imageSize(1800, 1200)).toBe('2K');
+  });
+
+  it('posts one interaction with the plan as the first image and PNG asked for', async () => {
+    accept(GEMINI_OK);
+    const job = await geminiFlashImage.submit({
+      ...ARGS,
+      prompt: 'A photorealistic top-down view.',
+      refs: [{ id: 'p1', base64: 'U09GQQ==', label: 'sofa (living room)' }],
+    });
+    const done = await settled(geminiFlashImage, job.pollUrl);
+    expect(done.status).toBe('ready');
+    if (done.status !== 'ready') return;
+    expect(done.imageUrl).toBe(`data:image/jpeg;base64,${GEMINI_JPEG}`);
+
+    expect(sent[0].url).toBe('https://generativelanguage.googleapis.com/v1beta/interactions');
+    expect((sent[0].init.headers as Record<string, string>)['x-goog-api-key']).toBe('test-gemini-key');
+    const b = bodyOf();
+    expect(b.model).toBe('gemini-3.1-flash-image');
+    const input = b.input as Record<string, unknown>[];
+    /* Text first, then the plan as the FIRST image — every legend numbers the
+       plan as image 1 — then the photographs in slot order. */
+    expect(input[0].type).toBe('text');
+    expect(String(input[0].text)).toContain('image 2 is the sofa (living room)');
+    expect(input[1]).toMatchObject({ type: 'image', mime_type: 'image/png', data: 'UkVGRVJFTkNF' });
+    expect(input[2]).toMatchObject({ type: 'image', mime_type: 'image/jpeg', data: 'U09GQQ==' });
+    /* JPEG, and not a preference: the live endpoint refuses image/png and
+       image/webp outright, quoting 'image/jpeg' as the only supported value. */
+    expect(b.response_format).toEqual({
+      type: 'image', aspect_ratio: '1:1', image_size: '1K', mime_type: 'image/jpeg',
+    });
+  });
+
+  it('never sends more photographs than the object-reference cap', async () => {
+    /* Ten object references is what Google documents for the flash model, and the
+       plan takes the eleventh slot. A twelfth image is not billed like OpenAI's —
+       it is a 400 for the whole request. */
+    accept(GEMINI_OK);
+    const job = await geminiFlashImage.submit({
+      ...ARGS,
+      refs: Array.from({ length: 14 }, (_, i) => ({ id: `p${i}`, base64: 'U09GQQ==', label: `thing ${i}` })),
+    });
+    await settled(geminiFlashImage, job.pollUrl);
+    const input = bodyOf().input as unknown[];
+    /* one text part, then the plan plus ten photographs */
+    expect(input).toHaveLength(1 + metaOf('gemini-flash-image').maxReferences);
+  });
+
+  it('treats an exhausted daily quota as terminal and a plain rate limit as retryable', async () => {
+    /* Google phrases both through 429 RESOURCE_EXHAUSTED. A daily quota will not
+       clear inside the client's three-minute budget, so polling it is three
+       minutes spent discovering nothing; a per-minute limit is worth the retry. */
+    accept({ error: { code: 429, status: 'RESOURCE_EXHAUSTED', message: 'Quota exceeded for requests per day.' } }, 429);
+    let job = await geminiFlashImage.submit(ARGS);
+    let r = await settled(geminiFlashImage, job.pollUrl);
+    expect(r.status === 'failed' && r.retryable).toBe(false);
+    expect(r.status === 'failed' && r.error).toContain('Out of quota at Google');
+
+    accept({ error: { code: 429, status: 'RESOURCE_EXHAUSTED', message: 'Resource has been exhausted (e.g. check quota).' } }, 429);
+    job = await geminiFlashImage.submit(ARGS);
+    r = await settled(geminiFlashImage, job.pollUrl);
+    expect(r.status === 'failed' && r.retryable).toBe(true);
+  });
+
+  it('refuses an answer in a format it did not ask for', async () => {
+    /* The body pins mime_type to the one value the endpoint accepts. A vendor
+       that answers something else anyway must fail here, loudly: the bucket
+       checks the mime and the row records the type, so mislabelled bytes are a
+       file whose contents disagree with everything written about it. */
+    accept(geminiOk({
+      steps: [{ type: 'model_output', content: [{ type: 'image', mime_type: 'image/png', data: GEMINI_JPEG }] }],
+    }));
+    const job = await geminiProImage.submit(ARGS);
+    const r = await settled(geminiProImage, job.pollUrl);
+    expect(r.status).toBe('failed');
+    expect(r.status === 'failed' && r.error).toContain('image/png');
+  });
+
+  it('forgets a collected render rather than serving it twice', async () => {
+    accept(GEMINI_OK);
+    const job = await geminiFlashImage.submit(ARGS);
+    expect((await settled(geminiFlashImage, job.pollUrl)).status).toBe('ready');
+
+    const again = await geminiFlashImage.poll(job.pollUrl);
+    expect(again.status).toBe('failed');
+    expect(again.status === 'failed' && again.error).toContain('no longer holding it');
+  });
+
+  it('keeps the API key off any host that only looks like Google', () => {
+    expect(geminiKeyedUrl('https://generativelanguage.googleapis.com/v1beta/interactions?held=x')).toBeTruthy();
+    expect(geminiKeyedUrl('https://generativelanguage.googleapis.com.evil.test/v1')).toBeNull();
+    expect(geminiKeyedUrl('https://evilgenerativelanguage.googleapis.com.example.com/v1')).toBeNull();
+    expect(geminiKeyedUrl('http://generativelanguage.googleapis.com/v1beta/interactions')).toBeNull();
+    expect(geminiKeyedUrl('not a url')).toBeNull();
+  });
+
+  it('finds the picture where it actually is, past the step that holds the thinking', async () => {
+    /* The regression this whole block exists for. The image is a content part of
+       a `model_output` step, NOT an `output_image` field, and a `thought` step
+       carrying a megabyte-and-a-half opaque signature comes first. Reading the
+       wrong field is a 200 that looks like a failure to everyone downstream. */
+    accept(GEMINI_OK);
+    const job = await geminiFlashImage.submit(ARGS);
+    const done = await settled(geminiFlashImage, job.pollUrl);
+    expect(done.status).toBe('ready');
+    if (done.status !== 'ready') return;
+    expect(done.imageUrl).toBe(`data:image/jpeg;base64,${GEMINI_JPEG}`);
+  });
+
+  it('takes the last image when the model revises its own work', async () => {
+    /* A model that redraws emits the finished frame last; taking the first would
+       hand back a draft and call it done. */
+    const FINAL = '/9j/RklOQUw=';
+    accept(geminiOk({
+      steps: [
+        { type: 'model_output', content: [{ type: 'image', mime_type: 'image/jpeg', data: GEMINI_JPEG }] },
+        { type: 'thought', signature: 'abc' },
+        { type: 'model_output', content: [{ type: 'image', mime_type: 'image/jpeg', data: FINAL }] },
+      ],
+    }));
+    const job = await geminiFlashImage.submit(ARGS);
+    const done = await settled(geminiFlashImage, job.pollUrl);
+    expect(done.status === 'ready' && done.imageUrl).toBe(`data:image/jpeg;base64,${FINAL}`);
+  });
+
+  it('repeats what the model said when it answers words instead of a picture', async () => {
+    /* A safety stop is a 200 with prose in it. The words are the only thing that
+       explains the failure, and swallowing them leaves the person waiting with
+       "no image data" — which is exactly the message that sent this adapter back
+       for a second look. */
+    accept(geminiOk({
+      steps: [{ type: 'model_output', content: [{ type: 'text', text: 'I cannot edit photographs of people.' }] }],
+    }));
+    const job = await geminiFlashImage.submit(ARGS);
+    const r = await settled(geminiFlashImage, job.pollUrl);
+    expect(r.status).toBe('failed');
+    expect(r.status === 'failed' && r.error).toContain('I cannot edit photographs of people.');
+    expect(r.status === 'failed' && r.retryable).toBe(false);
+  });
+
+  it('names an unfinished interaction rather than calling it empty', async () => {
+    accept(geminiOk({ status: 'failed', steps: [], error: { message: 'The model overloaded.', code: 'internal' } }));
+    const job = await geminiFlashImage.submit(ARGS);
+    const r = await settled(geminiFlashImage, job.pollUrl);
+    expect(r.status === 'failed' && r.error).toContain('status failed');
+    expect(r.status === 'failed' && r.error).toContain('The model overloaded.');
+  });
+
+  it('prices the render off what Google metered, not off the estimate', async () => {
+    /* The flat price in providers.ts is pessimistic arithmetic; this is the same
+       arithmetic over the counts Google reports. 272 input tokens at $0.50/1M
+       plus 1120 output-image tokens at $60/1M = $0.067336 on the flash model. The
+       ~240 output TEXT tokens are deliberately absent: the pricing page quotes no
+       rate for them, so the total is a floor and says so in the log rather than
+       carrying an invented figure. */
+    accept(GEMINI_OK);
+    const job = await geminiFlashImage.submit(ARGS);
+    const done = await settled(geminiFlashImage, job.pollUrl);
+    expect(done.status === 'ready' && done.cost).toBeCloseTo(0.067336, 6);
+    expect(job.usd).toBe(0.11);
+
+    /* Same tokens, dearer model: input $2.00/1M and image out $120/1M. */
+    accept(geminiOk({ model: 'gemini-3-pro-image' }));
+    const pro = await geminiProImage.submit(ARGS);
+    const proDone = await settled(geminiProImage, pro.pollUrl);
+    expect(proDone.status === 'ready' && proDone.cost).toBeCloseTo(0.134944, 6);
+  });
+
+  it('reads a refusal off the shape this endpoint actually uses', async () => {
+    /* `{ error: { message, code } }` with a STRING code — not the
+       `{ code, message, status }` of Google's older APIs. A 400 here is the
+       request being wrong, so it must not be retried. */
+    accept({ steps: [], error: { message: "The value '7:13' is not supported for 'response_format.aspect_ratio'.", code: 'invalid_request' } }, 400);
+    const job = await geminiFlashImage.submit(ARGS);
+    const r = await settled(geminiFlashImage, job.pollUrl);
+    expect(r.status === 'failed' && r.retryable).toBe(false);
+    expect(r.status === 'failed' && r.error).toContain("not supported for 'response_format.aspect_ratio'");
+  });
+
+  it('decodes the finished render itself and refuses anything that is not one', async () => {
+    const uri = `data:image/jpeg;base64,${GEMINI_JPEG}`;
+    const src = geminiFlashImage.deliveryUrl(uri)!;
+    expect(src).toBeTruthy();
+    const res = await geminiFlashImage.fetchDelivery(src);
+    expect(res.headers.get('content-type')).toBe('image/jpeg');
+    expect(Buffer.from(await res.arrayBuffer()).equals(Buffer.from(GEMINI_JPEG, 'base64'))).toBe(true);
+
+    expect(geminiFlashImage.deliveryUrl('data:image/svg+xml;base64,PHN2Zz4=')).toBeNull();
+    /* and a PNG data URI is refused too, because this provider never makes one */
+    expect(geminiFlashImage.deliveryUrl('data:image/png;base64,iVBORw0KGgo=')).toBeNull();
+    expect(geminiFlashImage.deliveryUrl(`data:image/jpeg;base64,${GEMINI_JPEG} <script>`)).toBeNull();
   });
 });

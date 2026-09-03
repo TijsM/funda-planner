@@ -105,6 +105,7 @@ const KEY_SOURCE: Record<string, string> = {
   FLUX_API_KEY: 'Create one at dashboard.bfl.ai and add it to .env as FLUX_API_KEY.',
   FAL_KEY: 'Create one at fal.ai/dashboard/keys and add it to .env as FAL_KEY.',
   OPENAI_API_KEY: 'Create one at platform.openai.com/api-keys and add it to .env as OPENAI_API_KEY.',
+  GEMINI_API_KEY: 'Create one at aistudio.google.com/apikey and add it to .env as GEMINI_API_KEY.',
 };
 
 export function missingEnvMessage(p: ProviderMeta): string {
@@ -219,12 +220,13 @@ export const PROVIDER_META: ProviderMeta[] = [
   },
   {
     id: 'qwen-edit',
-    label: 'Qwen Image Edit Plus',
-    /* fal.ai/models/fal-ai/qwen-image-edit-plus: "Your request will cost $0.03
-       per megapixel." The research sweep put this at $0.02–0.03 with sources
-       disagreeing; the model page is the source that can be re-read, it says the
-       higher figure, and the pessimistic read is the one a ceiling is allowed to
-       trust. */
+    label: 'Qwen Image Edit 2511',
+    /* fal.ai/models/fal-ai/qwen-image-edit-2511: "Your request will cost $0.03
+       per megapixel" — the same rate the retired -plus endpoint charged, read off
+       the model page on 2026-09-03. The id stays 'qwen-edit' because it is stored
+       on render rows; the endpoint moved to 2511 because that release targets
+       image drift directly and carries the family's geometric-reasoning work,
+       which is the one thing this app buys an edit model for. */
     usdPerMegapixel: 0.03,
     /* Multi-image editing, not control: extra maps arrive as more reference
        pictures in image_urls, the same deal FLUX.2 offers. */
@@ -237,7 +239,70 @@ export const PROVIDER_META: ProviderMeta[] = [
     dimStep: DIM_STEP,
     minDim: MIN_DIM,
     needsEnv: 'FAL_KEY',
-    note: 'Apache-2.0 weights, takes up to three reference images at once.',
+    note: 'Apache-2.0 weights with native geometry conditioning, takes up to three reference images at once.',
+  },
+  {
+    id: 'gemini-flash-image',
+    label: 'Gemini 3.1 Flash Image',
+    /* Token-priced like OpenAI's models, so a flat pessimistic estimate is the
+       only honest shape — see the mini's note below for how to read one of these.
+       Rates from ai.google.dev/gemini-api/docs/pricing on 2026-09-03:
+         output   a 2K image is 1680 output-image tokens at $60/1M → $0.101; a 1K
+                  image is 1120 → $0.067. The adapter asks for 2K only when the
+                  request wants more than a megapixel and a half, so $0.101 is the
+                  dear case, not the every case.
+         input    $0.50/1M for text and image alike. Eleven input images (the
+                  plan and ten photographs) at Google's own per-image equivalence
+                  (~560-1120 tokens each) → under $0.007.
+         prompt   2000 tokens → $0.001.
+                                                                    ------
+                                                                    ≈$0.109
+       Over the global dime by a cent at 2K, which is why it carries its own
+       ceiling — the same licence GPT Image 2 has, at a third of a dime instead
+       of three and a half. */
+    usdPerMegapixel: null,
+    flatUsdPerImage: 0.11,
+    maxUsdPerImage: 0.12,
+    /* No control channel in the Interactions API — a map can only ride along as
+       another named reference picture, the same deal FLUX.2 offers. */
+    acceptsControls: [],
+    /* Google documents up to 14 reference images with a cap of 10 OBJECT
+       references on this model, and an object photograph is what this app
+       attaches. The plan takes one slot, so ten photographs fit — the widest
+       photo budget of any provider here. */
+    maxReferences: 11,
+    /* '2K' output: 2048 on the long side, so about 4 MP at 1:1 and less at any
+       other ratio. The adapter maps whatever is asked for onto Google's fixed
+       menu of aspect ratios and the 1K/2K sizes. */
+    maxOutputPixels: 4_000_000,
+    dimStep: DIM_STEP,
+    minDim: MIN_DIM,
+    needsEnv: 'GEMINI_API_KEY',
+    note: 'The 2026 editing-arena leader ("Nano Banana 2") and the widest photo budget here: ten'
+      + ' object photographs. Reads the plan at full fidelity. No seed, fixed aspect-ratio menu.',
+  },
+  {
+    id: 'gemini-pro-image',
+    label: 'Gemini 3 Pro Image',
+    /* Same shape as the flash model above, at the premium rates. Pricing page,
+       2026-09-03: a 1K/2K image is $0.134 flat (1120 output tokens at $120/1M);
+       input is $2.00/1M — Google's own equivalence is "$0.0011 per image" — so
+       the plan plus six photographs is under $0.01, and a 2000-token prompt is
+       $0.004. Worst case ≈ $0.148; 4K exists upstream ($0.24) and is not asked
+       for, because no ceiling here can carry it. */
+    usdPerMegapixel: null,
+    flatUsdPerImage: 0.15,
+    maxUsdPerImage: 0.16,
+    acceptsControls: [],
+    /* The Pro model's documented object-reference cap is 6, not 10 — the premium
+       tier trades reference breadth for editing fidelity. Plan plus six. */
+    maxReferences: 7,
+    maxOutputPixels: 4_000_000,
+    dimStep: DIM_STEP,
+    minDim: MIN_DIM,
+    needsEnv: 'GEMINI_API_KEY',
+    note: 'The strongest structure-preserving editor measured in 2026 ("Nano Banana Pro"), for the'
+      + ' render that has to be right. Dearer than the flash model; takes six photographs. No seed.',
   },
   {
     id: 'openai-image-mini',
@@ -335,7 +400,19 @@ export const PROVIDER_META: ProviderMeta[] = [
   },
 ];
 
+/** The fallback for anything that predates the picker: every render row and every
+ *  saved settings blob written before providers existed was drawn by FLUX.2 [max],
+ *  so an absent id resolves to it — see `providerOf` and the status route. This is
+ *  a fact about history, not a recommendation; do not change it when the default
+ *  choice moves. */
 export const DEFAULT_PROVIDER = 'flux2-max';
+
+/** What a fresh panel starts on — separate from the history fallback above on
+ *  purpose. The 2026-09 research sweep put Gemini's flash image model top of the
+ *  editing arenas for exactly this job (keep the input's geometry, retexture it),
+ *  with the widest photo budget on the list and a cheaper worst case than the
+ *  model it displaces. Existing saved settings keep whatever they say. */
+export const DEFAULT_PICK = 'gemini-flash-image';
 
 export function metaOf(id: string | null | undefined): ProviderMeta {
   return PROVIDER_META.find((p) => p.id === id)

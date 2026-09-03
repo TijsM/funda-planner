@@ -112,8 +112,20 @@ export const RENDER_BUCKET = 'renders';
 /** Storage keys always start with the owner's uuid — the bucket's RLS policies
  *  authorise on that first path segment alone, so this function is not a
  *  convenience, it is the thing that makes the policies true. */
-export const renderImagePath = (ownerId: string, renderId: string) =>
-  `${ownerId}/${renderId}.png`;
+export const renderImagePath = (ownerId: string, renderId: string, ext: RenderExt = 'png') =>
+  `${ownerId}/${renderId}.${ext}`;
+
+/** The file extensions a render may be stored under — which is to say, the
+ *  formats the providers actually answer with. Every model here draws a PNG
+ *  except Google's, whose Interactions API offers JPEG and nothing else (probed;
+ *  see the note at the top of src/server/providers/gemini.ts). The extension is
+ *  therefore a property of the bytes, not a constant: a JPEG stored as `.png`
+ *  with `contentType: image/png` is a row that lies about what is in the bucket,
+ *  and the bucket's own mime allowlist would refuse it anyway.
+ *
+ *  Existing rows are unaffected — `image_path` is stored per render, so every
+ *  `.png` already written stays exactly where it is. */
+export type RenderExt = 'png' | 'jpg';
 export const renderThumbPath = (ownerId: string, renderId: string) =>
   `${ownerId}/${renderId}.thumb.png`;
 

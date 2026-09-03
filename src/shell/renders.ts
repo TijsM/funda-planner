@@ -266,15 +266,31 @@ export async function deleteRendersForProject(projectId: string): Promise<void> 
  *  header, so the bytes come back through our own server. The conversion lives
  *  here, on the way in: the store holds Blobs only — base64 is a third larger
  *  and IndexedDB has no reason to carry the padding. */
-export function pngFromBase64(b64: string): Blob {
+export function blobFromBase64(b64: string, contentType?: string): Blob {
   /* tolerate a data: URL — canvas.toDataURL() produces one and it will be
      pasted into this path sooner or later */
   const comma = b64.indexOf(',');
-  const raw = atob(b64.startsWith('data:') && comma > -1 ? b64.slice(comma + 1) : b64);
+  const isData = b64.startsWith('data:') && comma > -1;
+  const raw = atob(isData ? b64.slice(comma + 1) : b64);
   const bytes = new Uint8Array(raw.length);
   for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-  return new Blob([bytes], { type: 'image/png' });
+  /* The caller's type, else the one the data: URL declares, else PNG — which is
+     what every provider but Google answers with. Not a cosmetic label: this Blob
+     is what `download` saves and what the <img> in the filmstrip points at. */
+  const declared = isData ? /^data:([^;,]+)/.exec(b64)?.[1] : undefined;
+  return new Blob([bytes], { type: contentType || declared || 'image/png' });
 }
+
+/** The file extension for a render's bytes, which follows the BYTES and not a
+ *  constant. Not every render is a PNG: Google's models answer JPEG and cannot
+ *  be asked for anything else, and a .png file that is actually a JPEG is one
+ *  some image tools refuse outright.
+ *
+ *  Here rather than at the two download buttons because it was written at one of
+ *  them and hardcoded `.png` at the other, so a Gemini render saved from the
+ *  filmstrip arrived misnamed while the same render saved from the panel did
+ *  not. One rule, one place. */
+export const imageExt = (blob: Blob): 'jpg' | 'png' => (blob.type === 'image/jpeg' ? 'jpg' : 'png');
 
 /** The full-size bytes of one render, wherever they live — for download, which
  *  is the one place that needs the actual file rather than something to point an

@@ -23,7 +23,7 @@ import {
   type ControlKind,
 } from '@data/providers';
 import { download, referenceOpts, renderFloorCanvas } from '../files';
-import { deleteRender, renderBlob, succeeded, totalBytes, type RenderRecord } from '../renders';
+import { deleteRender, imageExt, renderBlob, succeeded, totalBytes, type RenderRecord } from '../renders';
 import { refreshRenders, startRender } from '../jobs';
 import { Icon } from './Icons';
 import { usePhotoState } from './photoUrls';
@@ -362,7 +362,7 @@ export function RenderModal() {
       ed().toast('That render could not be fetched for download — reopen this panel and try again.', 'err');
       return;
     }
-    download(blob, `${slug(`${project.name}-${floor.name}`)}-render-${numberOf(rec.id) ?? 1}-seed${rec.seed ?? 0}.png`);
+    download(blob, `${slug(`${project.name}-${floor.name}`)}-render-${numberOf(rec.id) ?? 1}-seed${rec.seed ?? 0}.${imageExt(blob)}`);
   };
 
   const removeRender = async (rec: RenderRecord) => {
@@ -720,12 +720,12 @@ export function RenderModal() {
               {/* Two pictures, two explanations. The top-down sentence is about a
                   drawing and its lettering; on the eye-level view this is not a
                   drawing of the plan at all, and the thing a person needs told is
-                  what the grey is for — every one of them reads it as a colour
-                  scheme first. */}
+                  what the flat colours are for — every one of them reads it as a
+                  finished palette first. */}
               {view === 'eye' && camera ? (
                 <>
-                  What the camera sees, built from the plan: right geometry, no materials.
-                  {' '}The render replaces the grey — it does not copy it. <b>Copy image</b>
+                  What the camera sees, built from the plan: right geometry, placeholder colours.
+                  {' '}The render replaces those colours — it does not copy them. <b>Copy image</b>
                   {' '}takes it elsewhere.
                 </>
               ) : (

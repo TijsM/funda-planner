@@ -280,11 +280,15 @@ export const fluxGeneralBody: BodyFor = (meta, args) => {
   };
 };
 
-/** Qwen Image Edit Plus, fal-ai/qwen-image-edit-plus. Multi-image editing rather
- *  than control: there is no conditioning strength anywhere in the schema, so
- *  extra maps ride along as more reference pictures exactly the way they do on
- *  FLUX.2 — with the same caveat that nothing says the model reads them as
- *  geometry.
+/** Qwen Image Edit 2511, fal-ai/qwen-image-edit-2511 — the November release that
+ *  replaced the -plus endpoint this shipped on. Same request shape (verified
+ *  against the model page on 2026-09-03: `prompt` and `image_urls`, PNG out) and
+ *  the same $0.03/MP rate; what changed upstream is the model, which targets
+ *  image drift directly and carries the family's geometric-reasoning work — the
+ *  one thing this app buys an edit model for. Multi-image editing rather than
+ *  control: there is no conditioning strength anywhere in the schema, so extra
+ *  maps ride along as more reference pictures exactly the way they do on FLUX.2 —
+ *  with the same caveat that nothing says the model reads them as geometry.
  *
  *  The three-image cap is OURS, not fal's: the docs state no maximum for
  *  `image_urls` and only the worked example happens to pass three. Capped anyway,
@@ -479,4 +483,4 @@ function falProvider(meta: ProviderMeta, model: string, build: BodyFor): Provide
 
 export const zImageCn: Provider = falProvider(metaOf('z-image-cn'), 'fal-ai/z-image/turbo/controlnet', zImageBody);
 export const fluxGeneralCn: Provider = falProvider(metaOf('flux-general-cn'), 'fal-ai/flux-general/image-to-image', fluxGeneralBody);
-export const qwenEdit: Provider = falProvider(metaOf('qwen-edit'), 'fal-ai/qwen-image-edit-plus', qwenBody);
+export const qwenEdit: Provider = falProvider(metaOf('qwen-edit'), 'fal-ai/qwen-image-edit-2511', qwenBody);

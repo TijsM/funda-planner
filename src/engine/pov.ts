@@ -5,7 +5,8 @@ import { NEAR_CM, povFrame, project, toView, type Cam } from './camera';
 import { buildScene, triangulate, type SceneOpts } from './scene';
 import { clamp } from './geometry';
 import {
-  CHANGE, SEG_INTERIOR, SEG_WALL, itemFreedom, segObjectColor, segRoomColors, type PassKind,
+  CHANGE, SEG_INTERIOR, SEG_WALL, itemFreedom, objectHue, segObjectColor, segRoomColors,
+  type PassKind,
 } from './passes';
 
 type Ctx = CanvasRenderingContext2D;
@@ -281,17 +282,53 @@ function bytesOf(css: string): RGB {
  *  the same meaning: no floor, no ceiling, nothing to place. */
 const VOID: RGB = [0, 0, 0];
 
-/** Base tone per surface class for the shaded massing, before the light. Not
- *  decoration: it is the one cue that separates a floor from a ceiling for a
- *  model looking at a grey picture, and both of them are horizontal planes lit
- *  from above. Windows sit at the top of the range because a window IS the
+/** Base colour per surface class for the shaded massing, before the light.
+ *
+ *  These were six greys until the 2026-09 research sweep: practitioner evidence
+ *  (PH's Archviz workflow feeds a colour-coded mesh; texturemap's "the value of a
+ *  render is inversely proportional to how much the model had to invent") is that
+ *  flat SEMANTIC colour on the reference measurably improves adherence over bare
+ *  grey — the model no longer has to decide whether a dark horizontal plane is a
+ *  floor or a shadow. So each class now carries a muted placeholder colour in its
+ *  material's own family: wood-toned room floors, plaster-off-white walls, a
+ *  near-white ceiling. Placeholder, not decoration — the brief still says to
+ *  replace every one of them with a real material.
+ *
+ *  The LUMINANCE of each entry is the old grey, kept on purpose: the tone gaps
+ *  between classes were tuned against `AMBIENT` below so that a lit floor never
+ *  meets a shadowed wall (see that note), and chroma is added around those values
+ *  rather than instead of them. Windows stay pure white because a window IS the
  *  bright thing in an interior photograph, and the render puts daylight wherever
- *  this picture is brightest. */
-const TONE: Record<FaceClass, number> = {
-  floor: 0.32, room: 0.35, ceiling: 0.8, wall: 0.72, window: 1, item: 0.55,
+ *  this picture is brightest. The `item` entry is a fallback — a placed object
+ *  takes a muted hue of its own from `itemInk` below. */
+type RGBf = readonly [number, number, number];
+
+const INK: Record<FaceClass, RGBf> = {
+  floor: [0.32, 0.32, 0.32],               // untraced slab: no room, no material claim
+  room: [0.46, 0.35, 0.25],                // a traced floor: warm timber family
+  ceiling: [0.81, 0.8, 0.78],
+  wall: [0.75, 0.72, 0.66],                // plaster, just off the ceiling's white
+  window: [1, 1, 1],
+  item: [0.55, 0.55, 0.55],
 };
 
-/** Classes whose `TONE` is the finished grey, with no light applied.
+/** The muted colour one object group wears in the massing: the same hue its
+ *  segmentation colour owns (`objectHue` — shared so the two pictures are one
+ *  statement about which block is which), at a quarter of the saturation and the
+ *  item class's own luminance. Muted because this is a picture read as a picture:
+ *  a saturated teal sofa is an instruction to buy a teal sofa, where a grey-teal
+ *  one says "this block is one object, distinct from its neighbours" and leaves
+ *  the palette to the STYLE block. */
+function itemInk(key: string): RGBf {
+  const h = objectHue(key);
+  const l = 0.55, s = 0.25;
+  const k = (n: number) => (n + h / 30) % 12;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+  return [f(0), f(8), f(4)];
+}
+
+/** Classes whose `INK` entry is the finished colour, with no light applied.
  *
  *  A window because it is the source and not a surface catching one. A ceiling
  *  because it faces down and the key light comes from above, so it can only ever
@@ -318,7 +355,7 @@ const LIGHT: V3 = (() => {
  *  missing one.
  *
  *  It is also what keeps the classes apart. At 0.55 the swing between a lit and
- *  an unlit face was wider than the gap between two `TONE` entries, so a floor
+ *  an unlit face was wider than the luminance gap between two `INK` entries, so a floor
  *  turned towards the light came out the same grey as the wall standing on it
  *  and the junction between them disappeared — on the one picture whose job is
  *  to say where the walls are. Narrowing the light lets tone win; the edges
@@ -516,9 +553,9 @@ function writeLine(px: Uint8ClampedArray, b: PovBuffers) {
   for (let i = 0; i < edge.length; i++) grey(px, i, edge[i] ? 0 : 1);
 }
 
-/** The picture a person looks at, and the one that goes as image 1: a grey
- *  massing render of the room from where the camera stands, with its edges drawn
- *  over the top.
+/** The picture a person looks at, and the one that goes as image 1: a massing
+ *  render of the room in flat placeholder colours from where the camera stands,
+ *  with its edges drawn over the top.
  *
  *  This is the eye-level answer to the plan drawing, and it is the whole reason
  *  the file exists. A top-down drawing does not contain what an eye-level camera
@@ -526,10 +563,10 @@ function writeLine(px: Uint8ClampedArray, b: PovBuffers) {
  *  where the horizon falls — so no amount of conditioning on one produces a
  *  faithful photograph from the other. This does contain it.
  *
- *  The lines are not decoration and they are not there to make it pretty. Six
- *  flat tones lit by one lamp cannot keep every pair of touching surfaces apart:
+ *  The lines are not decoration and they are not there to make it pretty. A few
+ *  flat colours lit by one lamp cannot keep every pair of touching surfaces apart:
  *  a sofa pushed against the wall behind it shares that wall's normal, so it
- *  takes the same light, and at some tone settings the two differ by a grey level
+ *  takes the same light, and at some tone settings the two differ by a level
  *  or two. That is a picture in which a piece of furniture has no outline, handed
  *  to a model whose job is to draw it. Tone carries the form and the lines carry
  *  the boundaries — which is also, exactly, what the top-down reference does.
@@ -541,23 +578,31 @@ function writeLine(px: Uint8ClampedArray, b: PovBuffers) {
  *  described in daylight. Blown-out white is what an interior photograph actually
  *  does with a window it is not exposing for. */
 function writeInk(px: Uint8ClampedArray, b: PovBuffers, fr: PovFrame) {
-  const shade = b.faces.map(fa => {
-    if (UNLIT.has(fa.cls)) return TONE[fa.cls];
+  const shade = b.faces.map((fa): RGBf => {
+    const base = fa.cls === 'item' ? itemInk(fa.key || 'Other') : INK[fa.cls];
+    if (UNLIT.has(fa.cls)) return base;
     /* Flip the normal towards the camera before lighting it. Nothing culls back
        faces here, so half the surfaces in the scene face away from the eye
        through no fault of their own — lit as they are wound, a room's four walls
-       come out in two different greys. */
+       come out in two different tones. */
     const c = fa.pts[0];
     const away = fa.n.x * (c.x - fr.cam.x) + fa.n.y * (c.y - fr.cam.y) + fa.n.z * (c.z - fr.cam.z);
     const s = away > 0 ? -1 : 1;
     const lam = Math.max(0, s * (fa.n.x * LIGHT.x + fa.n.y * LIGHT.y + fa.n.z * LIGHT.z));
-    return TONE[fa.cls] * (AMBIENT + (1 - AMBIENT) * lam);
+    const lit = AMBIENT + (1 - AMBIENT) * lam;
+    /* The light scales the colour, never re-hues it — a wall in shadow is a
+       darker wall, not a browner one. */
+    return [base[0] * lit, base[1] * lit, base[2] * lit];
   });
+  const byte = (v: number) => Math.round(clamp(v, 0, 1) * 255);
+  const colour = shade.map((c): RGB => [byte(c[0]), byte(c[1]), byte(c[2])]);
+  const EDGE: RGB = [20, 20, 20];
+  const PAPER: RGB = [255, 255, 255];
   /* Half the line pass's weight: this picture is read as a picture, and a stroke
      heavy enough to survive a control encoder reads here as a cartoon. */
   const edge = edgeMask(b, Math.max(1, Math.round(Math.min(b.width, b.height) / 900)));
   for (let i = 0; i < b.face.length; i++) {
     const fi = b.face[i];
-    grey(px, i, edge[i] ? 0.08 : fi < 0 ? 1 : shade[fi]);
+    put(px, i, edge[i] ? EDGE : fi < 0 ? PAPER : colour[fi]);
   }
 }

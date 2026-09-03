@@ -238,6 +238,28 @@ describe('planSpend', () => {
     expect(refusals.join(' ')).toMatch(/fits — lower --target-pixels/);
   });
 
+  /* The harness must not be stricter than the route it drives. A provider that
+     carries its own `maxUsdPerImage` — GPT Image 2 and both Gemini models do —
+     was refused here against the global dime while the server would have drawn
+     it, which made those providers unsweepable and the measurement impossible to
+     take. */
+  it('measures each provider against its own ceiling, as the route does', () => {
+    const { refusals } = planSpend(
+      [cell({ provider: 'gemini-flash-image', width: 1200, height: 864, usd: 0.11 })], opts);
+    expect(refusals).toEqual([]);
+  });
+
+  it('does not offer a smaller canvas to a provider priced per image', () => {
+    /* Every size costs the same on a flat-priced model, so "lower
+       --target-pixels" is advice that cannot work — and `affordableDims` answers
+       with the provider's MAXIMUM there, which reads as "make it bigger". */
+    const { refusals } = planSpend(
+      [cell({ provider: 'gemini-pro-image', width: 1200, height: 864, usd: 0.30 })], opts);
+    expect(refusals.join(' ')).toMatch(/past the \$0.16 ceiling/);
+    expect(refusals.join(' ')).toMatch(/no smaller canvas is cheaper/);
+    expect(refusals.join(' ')).not.toMatch(/lower --target-pixels/);
+  });
+
   it('lets an affordable sweep through with no refusals, and totals it per provider', () => {
     const { refusals, total, byProvider } = planSpend(
       [cell(), cell(), cell({ provider: 'flux2-max', usd: 0.0734 })], opts);

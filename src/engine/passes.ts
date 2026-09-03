@@ -220,6 +220,16 @@ function hsl(h: number, s: number, l: number): string {
   return `rgb(${Math.round(f(0) * 255)},${Math.round(f(8) * 255)},${Math.round(f(4) * 255)})`;
 }
 
+/** The hue one object group owns, 0-359. Split out of `segObjectColor` because
+ *  two passes now read it at two saturations: the seg map at full chroma, and the
+ *  eye-level ink render as a muted placeholder colour (`itemInk` in ./pov.ts).
+ *  Sharing the hue is what keeps them one statement — the sofa that is teal on
+ *  the segmentation map is a greyed teal in the massing, never a different
+ *  colour that a model reading both would take for a second object. */
+export function objectHue(key: string): number {
+  return hash32(`object:${key}`) % 360;
+}
+
 /** The flat colour one object gets, keyed by its catalogue group — and by
  *  'door' / 'window' for an opening, which is an object as far as a
  *  segmentation encoder is concerned and emphatically not a wall.
@@ -228,7 +238,7 @@ function hsl(h: number, s: number, l: number): string {
  *  the others. The keys are a fixed set, so whether any two of them collide is
  *  a static fact and `passes.test.ts` asserts it stays false. */
 export function segObjectColor(key: string): string {
-  return hsl(hash32(`object:${key}`) % 360, 0.72, 0.32);
+  return hsl(objectHue(key), 0.72, 0.32);
 }
 
 /** Every room on one floor, mapped to the flat colour the seg pass gives it.
