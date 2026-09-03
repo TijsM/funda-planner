@@ -47,7 +47,7 @@ const { paintPass, PASS_KINDS } = await engine('passes.ts');
 const { buildPrompt } = await engine('prompt.ts');
 const {
   PROVIDER_META, DEFAULT_PROVIDER, MAX_USD_PER_IMAGE, metaOf, estimateUsd, maxAffordablePixels,
-  affordableDims,
+  affordableDims, ceilingUsd,
 } = await fromRoot('src/data/providers.ts');
 
 const RUNS = fileURLToPath(new URL('../../eval/runs/', import.meta.url));
@@ -286,12 +286,26 @@ export function planSpend(cells, opts, preflightUsd = 0) {
     refusals.push(`${unpriced.join(', ')} publishes no price, so no image from it can be shown to cost`
       + ` less than the $${MAX_USD_PER_IMAGE.toFixed(2)} ceiling. Remove it from --providers.`);
   }
-  const dear = cells.find(c => c.usd !== null && c.usd > MAX_USD_PER_IMAGE);
+  /* Each provider against ITS OWN ceiling, which is what the server enforces:
+     `assertAffordable` reads `ceilingUsd(meta)`, i.e. the provider's
+     `maxUsdPerImage` where it states one and the global limit otherwise. This
+     check used to compare every cell with the global $0.10 and so refused whole
+     providers the route would happily have drawn — GPT Image 2 and both Gemini
+     models carry their own licence, and none of them could be swept at all. A
+     harness stricter than the thing it measures measures nothing. */
+  const dear = cells.find(c => c.usd !== null && c.usd > ceilingUsd(metaOf(c.provider)));
   if (dear) {
-    const fits = affordableDims(metaOf(dear.provider), dear.width, dear.height);
+    const meta = metaOf(dear.provider);
+    const fits = affordableDims(meta, dear.width, dear.height);
+    /* Only offer a smaller canvas when the price actually depends on one. On a
+       flat-priced provider every size costs the same, so "lower --target-pixels"
+       is advice that cannot work — `affordableDims` answers with the provider's
+       maximum, which reads as "make it bigger" and is worse than silence. */
+    const sizePriced = meta.usdPerMegapixel !== null;
     refusals.push(`${dear.provider} at ${dear.width}x${dear.height} is ${usd(dear.usd)} per image, past`
-      + ` the $${MAX_USD_PER_IMAGE.toFixed(2)} ceiling.`
-      + (fits ? ` ${fits.width}x${fits.height} fits — lower --target-pixels.` : ''));
+      + ` the $${ceilingUsd(meta).toFixed(2)} ceiling.`
+      + (fits && sizePriced ? ` ${fits.width}x${fits.height} fits — lower --target-pixels.`
+        : ' It is priced per image rather than per pixel, so no smaller canvas is cheaper.'));
   }
   if (total > opts.budget) {
     refusals.push(`The sweep estimates ${usd(total)}, past the --budget of $${opts.budget.toFixed(2)}.`

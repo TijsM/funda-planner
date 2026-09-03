@@ -533,10 +533,11 @@ describe('POST /api/render — object photos', () => {
   });
 
   it('refuses more photographs than any provider has room for', async () => {
-    const refs = Array.from({ length: 8 }, (_, k) => photo({ id: `p${k}` }));
+    /* Eleven, because the widest budget is now Gemini's ten object slots. */
+    const refs = Array.from({ length: 11 }, (_, k) => photo({ id: `p${k}` }));
     const res = await post({ ...OK, refs });
     expect(res.status).toBe(400);
-    expect(await said(res)).toContain('8 object photos');
+    expect(await said(res)).toContain('11 object photos');
     expect(sent).toHaveLength(0);
   });
 

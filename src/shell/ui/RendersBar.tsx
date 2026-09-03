@@ -7,7 +7,7 @@ import { slug } from '@engine/io/serialize';
 import { isCloud } from '@data/config';
 import { RESIGN_EVERY_MS } from '@data/cloudRenders';
 import { download } from '../files';
-import { deleteRender, renderBlob, succeeded, type RenderRecord } from '../renders';
+import { deleteRender, imageExt, renderBlob, succeeded, type RenderRecord } from '../renders';
 import { refreshRenders } from '../jobs';
 import { writeRendersBar } from '../storage';
 import { Icon } from './Icons';
@@ -68,7 +68,7 @@ export function RendersBar() {
       ed().toast('That render could not be fetched for download — reopen the panel and try again.', 'err');
       return;
     }
-    download(blob, `${slug(`${project.name}-${floor.name}`)}-render-${numberOf(rec.id) ?? 1}-seed${rec.seed ?? 0}.png`);
+    download(blob, `${slug(`${project.name}-${floor.name}`)}-render-${numberOf(rec.id) ?? 1}-seed${rec.seed ?? 0}.${imageExt(blob)}`);
   };
 
   const remove = async (rec: RenderRecord) => {

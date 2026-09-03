@@ -11,7 +11,7 @@ import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   IDB_NAME, deleteDatabase, deleteRender, deleteRendersForProject, getRender, listRenders,
-  pngFromBase64, putRender, renderBlob, succeeded, totalBytes,
+  blobFromBase64, imageExt, putRender, renderBlob, succeeded, totalBytes,
   type RenderRecord, type RenderSettings,
 } from '@shell/renders';
 
@@ -256,12 +256,13 @@ describe('renderBlob', () => {
   });
 });
 
-describe('pngFromBase64', () => {
+describe('blobFromBase64', () => {
   /* 1×1 transparent PNG — the same bytes the e2e stub serves. */
   const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+  const JPEG = '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAE=';
 
   it('decodes the base64 the status route sends back', async () => {
-    const blob = pngFromBase64(PNG);
+    const blob = blobFromBase64(PNG);
     expect(blob.type).toBe('image/png');
     expect(blob.size).toBe(Buffer.from(PNG, 'base64').byteLength);
     const head = new Uint8Array(await blob.arrayBuffer()).slice(0, 4);
@@ -269,6 +270,26 @@ describe('pngFromBase64', () => {
   });
 
   it('tolerates a data: URL, because canvas.toDataURL() produces one', () => {
-    expect(pngFromBase64(`data:image/png;base64,${PNG}`).size).toBe(pngFromBase64(PNG).size);
+    expect(blobFromBase64(`data:image/png;base64,${PNG}`).size).toBe(blobFromBase64(PNG).size);
+  });
+
+  it('labels the blob with the type the caller was told, not a hardcoded PNG', () => {
+    /* Gemini answers JPEG and cannot be asked for anything else, so the type has
+       to travel with the bytes: this Blob is what `download` saves and what the
+       filmstrip's <img> points at, and a JPEG saved as .png is a file that lies
+       about itself. */
+    expect(blobFromBase64(JPEG, 'image/jpeg').type).toBe('image/jpeg');
+    /* Failing an explicit type, believe the data: URL over the default. */
+    expect(blobFromBase64(`data:image/jpeg;base64,${JPEG}`).type).toBe('image/jpeg');
+    /* And with neither, PNG — what every provider but Google answers with. */
+    expect(blobFromBase64(PNG).type).toBe('image/png');
+  });
+
+  it('names the downloaded file after the bytes, not after a constant', () => {
+    /* Both download buttons ask this one function, because the rule was written
+       at the panel and hardcoded `.png` at the filmstrip — so the same Gemini
+       render saved from two places arrived under two names, one of them wrong. */
+    expect(imageExt(blobFromBase64(JPEG, 'image/jpeg'))).toBe('jpg');
+    expect(imageExt(blobFromBase64(PNG))).toBe('png');
   });
 });

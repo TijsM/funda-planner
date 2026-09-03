@@ -5,7 +5,7 @@ import { idsInShot } from '@engine/pov';
 import type { Floor } from '@engine/types';
 import type { PhotoSubject, ViewKind } from '@engine/prompt';
 import {
-  CONTROL_KINDS, DEFAULT_PROVIDER, maxAffordablePixels, metaOf, type ControlKind,
+  CONTROL_KINDS, DEFAULT_PICK, DEFAULT_PROVIDER, maxAffordablePixels, metaOf, type ControlKind,
 } from '@data/providers';
 import type { RenderRecord, RenderSettings } from '@shell/renders';
 
@@ -246,7 +246,11 @@ export interface RenderJob {
  *  one arrived, and a route that sent neither is caught in one place. */
 export type PollResponse =
   | { status: 'pending'; progress?: number | null }
-  | { status: 'ready'; image?: string; imageUrl?: string; bytes?: number; cost?: number | null }
+  | { status: 'ready'; image?: string; imageUrl?: string; bytes?: number; cost?: number | null;
+    /* What the bytes are, as the status route sniffed them — not every render is a
+       PNG any more: Google's models answer JPEG and nothing else. Optional because a
+       cloud poll answers with a signed URL and no bytes to type. */
+    contentType?: string }
   | { status: 'failed'; error: string; retryable?: boolean };
 
 /** The slice the lifecycle functions operate on — everything else in the store
@@ -467,10 +471,12 @@ export const useRenders = create<RenderState>(set => ({
      thing to want and the hint under the preview still explains the cost. What
      changed is which way round the default should be. */
   imgMeasures: false,
-  /* Unchanged behaviour for everyone who already had this panel: the same model,
-     the same price, no maps attached. Every other provider is a decision someone
-     has to take on purpose, and the picker quotes what it costs. */
-  provider: DEFAULT_PROVIDER,
+  /* A fresh panel starts on the pick the 2026-09 research sweep put top for this
+     job, not on the history fallback — see DEFAULT_PICK beside DEFAULT_PROVIDER
+     in @data/providers. Saved settings and old records keep whatever they say;
+     `settingsOf` below still falls back to DEFAULT_PROVIDER, because a record
+     from before the picker was drawn by FLUX.2 [max] and must reproduce as one. */
+  provider: DEFAULT_PICK,
   /* Off by default, and the honest reason is that nothing here has been through a
      real control encoder yet. On FLUX.2 a map is a semantic reference at best —
      the vendor says structure is interpreted semantically and there is no

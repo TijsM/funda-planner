@@ -3,6 +3,7 @@ import 'server-only';
 import { DEFAULT_PROVIDER, PROVIDER_META } from '@data/providers';
 import { flux2Flex, flux2Max } from './bfl';
 import { fluxGeneralCn, qwenEdit, zImageCn } from './fal';
+import { geminiFlashImage, geminiProImage } from './gemini';
 import { gptImage2, gptImageMini } from './openai';
 import type { Provider } from './types';
 
@@ -19,6 +20,8 @@ export const PROVIDERS: Record<string, Provider> = {
   [zImageCn.id]: zImageCn,
   [fluxGeneralCn.id]: fluxGeneralCn,
   [qwenEdit.id]: qwenEdit,
+  [geminiFlashImage.id]: geminiFlashImage,
+  [geminiProImage.id]: geminiProImage,
   [gptImageMini.id]: gptImageMini,
   [gptImage2.id]: gptImage2,
 };

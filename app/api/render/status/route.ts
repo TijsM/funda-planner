@@ -1,7 +1,7 @@
 import type { NextRequest } from 'next/server';
 import { isCloud } from '@data/config';
 import { missingEnvMessage } from '@data/providers';
-import { RENDER_BUCKET, renderImagePath, type RenderRow } from '@data/schema';
+import { RENDER_BUCKET, renderImagePath, type RenderExt, type RenderRow } from '@data/schema';
 import {
   DEFAULT_PROVIDER, PROVIDERS, ProviderError, providerOf, type Provider,
 } from '@server/providers';
@@ -218,17 +218,62 @@ const elapsed = (createdAt: string): number => {
   return Number.isFinite(started) ? Math.max(0, Date.now() - started) : 0;
 };
 
-/** The image's real dimensions, read straight out of the PNG's IHDR: 8 bytes of
- *  signature, a 4-byte length and the chunk type, then width and height as
- *  big-endian uint32s. Recorded because the provider is free to round the size
- *  it was asked for, and a row that repeats the request rather than describing
- *  the file is a row that lies about what is in the bucket. Returns null for
- *  anything that is not a PNG, in which case the requested size stands. */
-function pngSize(bytes: ArrayBuffer): { width: number; height: number } | null {
+/** What the delivered bytes actually are: the format, the extension to store it
+ *  under, and its real dimensions.
+ *
+ *  Sniffed from the bytes rather than taken from the vendor's content-type
+ *  header, because both the bucket's mime allowlist and the row's recorded size
+ *  have to be true about the FILE. A header is a claim; these are the bytes.
+ *
+ *  Two formats, because two are what the providers answer with: every model here
+ *  draws a PNG except Google's, whose Interactions API offers JPEG alone (probed
+ *  — see the note at the top of src/server/providers/gemini.ts). Anything else is
+ *  refused rather than stored, which is a change of behaviour worth stating: the
+ *  old code accepted any `image/*` and then recorded the REQUESTED size for
+ *  whatever it could not parse.
+ *
+ *  PNG is the IHDR: 8 bytes of signature, a 4-byte length and the chunk type,
+ *  then width and height as big-endian uint32s. JPEG has no such fixed offset —
+ *  the size lives in a frame header somewhere down a chain of segments, so the
+ *  chain is walked to the first SOFn, exactly as `jpegDims` does for incoming
+ *  object photographs in the submit route. */
+type ImageMeta = { contentType: 'image/png' | 'image/jpeg'; ext: RenderExt; width: number; height: number };
+
+function sniffImage(bytes: ArrayBuffer): ImageMeta | null {
   if (bytes.byteLength < 24) return null;
   const v = new DataView(bytes);
-  if (v.getUint32(0) !== 0x89504e47 || v.getUint32(4) !== 0x0d0a1a0a) return null;
-  return { width: v.getUint32(16), height: v.getUint32(20) };
+
+  if (v.getUint32(0) === 0x89504e47 && v.getUint32(4) === 0x0d0a1a0a) {
+    return {
+      contentType: 'image/png', ext: 'png',
+      width: v.getUint32(16), height: v.getUint32(20),
+    };
+  }
+
+  /* SOI, then segments: 0xFF, a marker, a two-byte length that counts itself.
+     SOF0/1/2/3, C5-C7, C9-CB, CD-CF carry the frame size; DAC/DNL and the
+     standalone markers do not, and RSTn/SOI/EOI carry no length at all. */
+  if (v.getUint16(0) !== 0xffd8) return null;
+  for (let i = 2; i + 9 < bytes.byteLength;) {
+    if (v.getUint8(i) !== 0xff) { i++; continue; }          // resynchronise on padding
+    const marker = v.getUint8(i + 1);
+    if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) { i += 2; continue; }
+    if (marker === 0xda || marker === 0xd9) break;          // start of scan: no header left to read
+    const len = v.getUint16(i + 2);
+    if (len < 2) break;
+    const isSof = (marker >= 0xc0 && marker <= 0xc3) || (marker >= 0xc5 && marker <= 0xc7)
+      || (marker >= 0xc9 && marker <= 0xcb) || (marker >= 0xcd && marker <= 0xcf);
+    if (isSof) {
+      /* precision, then height BEFORE width — the one field order in this file
+         that is the other way round from everything else. */
+      return {
+        contentType: 'image/jpeg', ext: 'jpg',
+        height: v.getUint16(i + 5), width: v.getUint16(i + 7),
+      };
+    }
+    i += 2 + len;
+  }
+  return null;
 }
 
 /** Marks a render settled and failed, then says so. Used only where the failure
@@ -331,15 +376,29 @@ async function cloud(q: URLSearchParams): Promise<Response> {
     return settleFailed(db, row, image.error, image.status);
   }
 
-  const path = renderImagePath(owner, row.id);
+  /* What the bytes ARE decides where they go and what they are labelled, because
+     the bucket checks the mime and the row records the size. A provider that
+     answered something neither PNG nor JPEG is refused here rather than stored
+     under a type it does not have. */
+  const meta = sniffImage(image.bytes);
+  if (!meta) {
+    console.warn(`[render] unreadable bytes render=${row.id} contentType=${image.contentType}`);
+    return settleFailed(
+      db, row,
+      `${provider.label} delivered ${image.bytes.byteLength} bytes that are neither a PNG nor a JPEG, so they were not stored. The credit is spent — try again.`,
+      502,
+    );
+  }
+
+  const path = renderImagePath(owner, row.id, meta.ext);
   const { error: upload } = await db.storage
     .from(RENDER_BUCKET)
-    .upload(path, image.bytes, { contentType: 'image/png', upsert: true });
+    .upload(path, image.bytes, { contentType: meta.contentType, upsert: true });
   if (upload) {
     /* The bytes exist and the credit is spent, but they are not anywhere this
        account can read them — so the row must not claim a size it cannot serve.
-       The bucket refuses anything but image/png and anything over 20 MB, and
-       both of those arrive here as this one message. */
+       The bucket refuses anything outside its mime allowlist and anything over
+       20 MB, and both of those arrive here as this one message. */
     console.warn(`[render] upload refused render=${row.id}: ${upload.message}`);
     return settleFailed(
       db, row,
@@ -348,7 +407,7 @@ async function cloud(q: URLSearchParams): Promise<Response> {
     );
   }
 
-  const size = pngSize(image.bytes);
+  const size = { width: meta.width, height: meta.height };
   /* `.select()` on an update is the only way to learn how many rows it touched:
      supabase-js answers a match of nothing with `error: null` like any other
      success, and the row can genuinely be gone by now — deleting the plan while
@@ -359,7 +418,7 @@ async function cloud(q: URLSearchParams): Promise<Response> {
       status: 'ready',
       image_path: path,
       bytes: image.bytes.byteLength,
-      ...(size ?? {}),
+      ...size,
       settled_at: new Date().toISOString(),
       duration_ms: elapsed(row.created_at),
     })

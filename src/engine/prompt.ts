@@ -550,11 +550,12 @@ export function buildPrompt(f: Floor, opts: PromptOpts): string {
   const maps = (opts.controls ?? []).filter(k => k in CONTROL_LINES);
   const photos = opts.photos ?? [];
   /* What image 1 is has to be said outright once the camera is placed, because
-     it is no longer a floor plan. It is a grey model of this room seen from the
-     lens — right geometry, no materials — and a model told only to "keep the
-     spatial arrangement" of it reproduces the grey as a colour scheme. Naming
-     what the greys are FOR is the whole instruction: geometry from the picture,
-     everything else from the words below.
+     it is no longer a floor plan. It is an untextured model of this room seen
+     from the lens in flat placeholder colours — right geometry, no materials —
+     and a model told only to "keep the spatial arrangement" of it reproduces the
+     flat colours as a finished palette. Naming what the colours are FOR is the
+     whole instruction: geometry from the picture, material families hinted by
+     the colours, everything else from the words below.
 
      Twenty-six words, and both halves of what it does not say are deliberate.
      It does not enumerate "every wall, window, doorway and object in the same
@@ -566,8 +567,8 @@ export function buildPrompt(f: Floor, opts: PromptOpts): string {
      do not; two positive sentences beat two positive sentences and a negative
      one, and the pair came to 116 words against the 80 the window allows. */
   if (povCam) {
-    L.push('Image 1 is a grey untextured 3D model of this room, from that camera.'
-      + ' Copy its geometry exactly and give every grey surface a real material.');
+    L.push('Image 1 is an untextured 3D model of this room in flat placeholder colours,'
+      + ' from that camera. Copy its geometry exactly; give every flat surface a real material.');
   } else if (maps.length || photos.length) {
     L.push('Keep the exact spatial arrangement from image 1 — same composition, same positioning of elements.');
   }

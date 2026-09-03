@@ -13,7 +13,7 @@ import { ensurePlanSynced } from '@data/sync';
 import { cloudRowId, noteRowId, resumePending, uploadThumbnail } from '@data/cloudRenders';
 import { pngBase64, referenceOpts, renderControlCanvases } from './files';
 import { photoBase64 } from './photos';
-import { listRenders, pngFromBase64, putRender, renderBlob, type RenderRecord } from './renders';
+import { blobFromBase64, listRenders, putRender, renderBlob, type RenderRecord } from './renders';
 
 /** Drives one render from Generate to a row in the filmstrip.
  *
@@ -83,7 +83,8 @@ function asPoll(body: Record<string, unknown> | null): PollResponse | null {
        "not a job status" message below rather than landing an empty render. */
     const image = typeof body.image === 'string' ? body.image : '';
     const imageUrl = typeof body.imageUrl === 'string' ? body.imageUrl : '';
-    if (image) return { status: 'ready', image };
+    const contentType = typeof body.contentType === 'string' ? body.contentType : undefined;
+    if (image) return { status: 'ready', image, contentType };
     if (imageUrl) return { status: 'ready', imageUrl };
     return null;
   }
@@ -157,8 +158,11 @@ async function pollOnce(id: string) {
   if (parsed.status === 'failed') { await failed(job, parsed.error); return; }
 
   const rec = parsed.image
-    ? recordOf(job, { blob: pngFromBase64(parsed.image) })
-    /* Cloud: the PNG is in the bucket already and this is a signed URL to it.
+    /* Typed with what the server said the bytes are rather than with a constant:
+       a JPEG in a Blob labelled image/png is a download that saves under the
+       wrong extension and a filmstrip entry the browser has to sniff. */
+    ? recordOf(job, { blob: blobFromBase64(parsed.image, parsed.contentType) })
+    /* Cloud: the image is in the bucket already and this is a signed URL to it.
        The record carries no bytes at all — see the note on `RenderRecord`. */
     : recordOf(job, { blob: null, imageUrl: parsed.imageUrl });
   /* Said before the record is written rather than after: the modal is very

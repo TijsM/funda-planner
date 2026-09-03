@@ -46,11 +46,12 @@ const MAX_TOTAL_IMAGE_BYTES = 8 * 1024 * 1024;
    the same kind twice or a caller looping over something it should not be. */
 const MAX_CONTROLS = 4;
 
-/* Seven, because the most generous provider we have takes eight reference images
-   and one of them is always the plan (`maxReferences` in @data/providers). The
-   browser works the same budget out per provider and sends only what fits; this
-   is the ceiling on what any client may ask for, whatever it believes. */
-const MAX_REFS = 7;
+/* Ten, because the most generous provider we have takes eleven reference images
+   and one of them is always the plan (`maxReferences` in @data/providers — the
+   Gemini flash model's ten object slots). The browser works the same budget out
+   per provider and sends only what fits; this is the ceiling on what any client
+   may ask for, whatever it believes. */
+const MAX_REFS = 10;
 
 /* The longest an object's caption may be. It travels to the vendor inside the
    prompt on the fal path, so it is user text on its way into someone else's

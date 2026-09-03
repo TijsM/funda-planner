@@ -341,3 +341,116 @@ That produces a scored surface over (signal × strength) and tells us three thin
 **Starting now, forever, costing nothing** — log every accepted (conditioning PNG, render) pair, so Option 9 has a dataset when we want it.
 
 **Not now** — Option 8 until the top-down case is settled, and Option 10 not at all.
+---
+
+## 7. 2026-09-03 sweep — models moved; the architecture did not
+
+A second research pass (web, two agents, ~60 sources) six months after the document above.
+Summary of what changed and what shipped from it. Claims tagged as before.
+
+**The architecture above is now the industry pattern.** Veras — the category leader,
+acquired by Chaos in Feb 2025 — conditions on depth + seg + edges extracted from the real
+model with a strength slider **[verified]**, which is options 3/8 of this document. Our
+advantage over every screenshot-upload tool is that our maps are ground truth from vector
+geometry, not monocular estimates. SketchUp Diffusion reviews are consistently poor
+("treats your model as a suggestion") **[verified]** — the SketchUp route stays rejected.
+
+**The model landscape moved under the provider list:**
+
+- **Gemini's image family ("Nano Banana") now leads the editing benchmarks that measure
+  our exact requirement** — keep input geometry, retexture it. GEditBench v2 (Mar 2026)
+  puts Gemini 3 Pro Image #1 overall and near-top on Visual Consistency; the live editing
+  arenas put Gemini 3.1 Flash Image #1 **[verified, benchmark snapshots move]**. The
+  archviz community converged on it for clay-render → photoreal. **Shipped:**
+  `gemini-flash-image` (new default pick, ~$0.07-0.10/img, ten object-photo slots) and
+  `gemini-pro-image` (quality tier, ~$0.15/img) via the Interactions API, synchronous,
+  held-in-process like OpenAI.
+- **GPT Image line measures WORST on structure preservation** of the frontier editors
+  (GPT Image 1.5 Visual Consistency 846 vs Nano Banana Pro 1108; GPT Image 2 itself
+  unmeasured — **[estimate]** by family) while being the dearest render we can ask for.
+  Kept, demoted from any recommendation.
+- **Qwen Image Edit 2511** replaces 2509/plus upstream: targets image drift directly,
+  native depth/edge conditioning, same $0.03/MP on fal **[verified]**. **Shipped:**
+  `qwen-edit` now points at `fal-ai/qwen-image-edit-2511`.
+- FLUX 3 exists but only the video model is accessible; FLUX.2 [klein] is a speed play.
+  Watch, don't move **[verified]**.
+
+**Textured vs grey massing (the open question in option 8):** no controlled study exists,
+but practitioner evidence is consistent that flat SEMANTIC colour coding beats bare grey
+for adherence (PH's Archviz workflow feeds a per-polygon-coloured mesh; texturemap:
+"the render's value is inversely proportional to how much the model had to invent")
+**[estimate — practitioner consensus, unbenchmarked]**. **Shipped:** the eye-level ink
+pass now renders flat placeholder colours — timber-family room floors, plaster walls,
+muted per-group object hues sharing the seg map's hue — at the same per-class luminance
+the grey massing was tuned to, so the AMBIENT/tone-separation work above still holds.
+The camera brief now says what the colours are for. A/B against grey on the harness is
+the natural next eval.
+
+### The Interactions API, read off the wire rather than the docs
+
+Everything in this subsection was probed against the live endpoint with a real key on
+2026-09-03, after the first implementation shipped and failed every render. It is here
+because the failure was entirely avoidable and the shape of the mistake generalises.
+
+**The bug.** The adapter read the finished image from `output_image.data` — the field the
+Google client libraries expose — and the REST answer has no such field. Every real render
+came back HTTP 200 and was reported to the person waiting as *"Google answered the render
+without any image data in it"*. The unit tests passed throughout, because the fixture had
+been written from the same guess as the code: **a fixture invented from the same
+assumption as the adapter cannot disagree with it**, so the whole test block was green and
+worthless. The fixture is now a transcript of a real 200, trimmed only in the length of
+its base64.
+
+**What actually comes back** (`src/server/providers/gemini.ts` carries the full transcript):
+
+```
+{ id, object: 'interaction', status: 'completed', model, usage: {...},
+  steps: [ { type: 'thought', signature: '<opaque, ~1.9 MB>' },
+           { type: 'model_output',
+             content: [ { type: 'image', mime_type: 'image/jpeg', data: <base64> } ] } ] }
+```
+
+The picture is a content part of a step, the model's thinking is a sibling step in front
+of it, and the last image wins (a model that revises its own work emits the final frame
+last). Text parts appear here too — that is how a safety stop arrives, as a 200 with prose
+instead of a picture — so they are read and repeated back rather than flattened into
+"no image".
+
+**The menus are the endpoint's own refusal messages**, not doc-page transcriptions: send a
+bad enum and it names every legal value. Aspect ratios are `1:1, 2:3, 3:2, 3:4, 4:3, 4:5,
+5:4, 9:16, 16:9, 21:9, 1:8, 8:1, 1:4, 4:1`; sizes are `512, 1K, 2K, 4K`. JPEG is the only
+output mime — `image/png` and `image/webp` are both refused by name, which is why this is
+the one provider in the app whose output is not a PNG.
+
+**Errors use `{ error: { message, code } }` with a STRING code** (`invalid_request`), which
+is *not* the `{ code, message, status }` of Google's older APIs.
+
+**Real metering, first bill.** A 1K frame reports 1120 output-image tokens — exactly what
+the flat estimate in `src/data/providers.ts` assumed, so that arithmetic is now confirmed
+rather than hoped. `receipt()` prices it from Google's own counts: $0.067 for the flash
+model on the probe render, against a $0.11 pessimistic estimate. One line is deliberately
+missing: `total_output_tokens` exceeds the image tokens by ~240 because the model also
+emits text, and the pricing page quotes no text-output rate for an image model, so the
+count is logged and left out of the total, which therefore reads as a floor.
+
+**Why the held-in-process bridge stays**, despite the answer carrying a real interaction
+`id`. Both halves were probed: `GET /v1beta/interactions/{id}` works and returns the
+completed interaction with its image intact, but `background: true` — a real parameter of
+this endpoint — is refused by these models by name ("does not support background
+interactions"; `gemini-3-pro-image-preview` accepts it and answers immediately with
+`status: 'in_progress'`). The id therefore only exists once the blocking POST has already
+returned, which is the same moment the held entry is filled in, so nothing is recoverable
+that was not already in hand. If Google ever lets these models take `background`, the
+retrieval endpoint is waiting and this provider becomes genuinely asynchronous like BFL's.
+
+**Collateral, found by the same pass:** the eval harness checked every cell against the
+global `MAX_USD_PER_IMAGE` instead of `ceilingUsd(meta)`, so the three providers carrying
+their own licence — GPT Image 2 and both Gemini models — could not be swept at all, and
+its "a smaller size fits" hint offered a *larger* canvas on flat-priced providers. Both
+fixed; a harness stricter than the thing it measures measures nothing.
+
+**Not shipped, ranked next:** per-hero-object masked refinement (we have exact object
+masks from the face buffer; reference-first beats text for product fidelity — a 4-model
+test showed text descriptions always produce a *different* product **[verified]**);
+a creative tiled upscale step for export quality (Magnific V2 / SUPIR class); multi-view
+consistency (SpatialGen, MVRoom) is research-only — no production API **[verified]**.
